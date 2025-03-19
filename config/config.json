@@ -1,0 +1,34 @@
+{
+    "stocks": [
+        "RELIANCE",
+        "HDFCBANK",
+        "TCS",
+        "INFY",
+        "ICICIBANK"
+    ],
+    "capital": 100000,
+    "max_risk_per_trade": 1000,
+    "opening_range_minutes": 30,
+    "max_opening_range_percent": 1.0,
+    "trade_exit_time": "15:14:00",
+    "market_open_time": "09:15:00",
+    "market_close_time": "15:30:00",
+    "exchange_code": "NSE",
+    "product_type": "cash",
+    "brokerage_rate": 0.0001,
+    "stt_rate": 0.00025,
+    "disable_weekend_trading": true,
+    "paper_trading": false,
+    "order_validity": "day",
+
+
+    "max_daily_loss": 5000,
+    "max_open_positions": 5,
+    "max_capital_exposure_percent": 80,
+    "max_position_size_percent": 10,
+    "max_trades_per_day": 10,
+    "max_consecutive_losses": 3,
+    "max_drawdown_percent": 5,
+    "circuit_breaker_enabled": true
+    
+}

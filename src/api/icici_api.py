@@ -28,7 +28,6 @@ class ICICIDirectAPI:
             'X-AppKey': self.app_key
         }
         
-        # Add session token if available
         if self.session_token:
             headers['X-SessionToken'] = self.session_token
             
@@ -38,23 +37,16 @@ class ICICIDirectAPI:
         """Make a request to the ICICI Direct API"""
         conn = http.client.HTTPSConnection(self.base_url)
         
-        # Convert payload to JSON string if provided
         payload_str = json.dumps(payload) if payload else ""
-        
-        # Generate headers with authentication
         headers = self._generate_headers(payload_str)
         
-        # Make the request
         conn.request(method, endpoint, payload_str, headers)
         
-        # Get the response
         response = conn.getresponse()
         data = response.read().decode("utf-8")
         
-        # Close the connection
         conn.close()
         
-        # Parse the JSON response
         try:
             return json.loads(data)
         except json.JSONDecodeError:
@@ -101,7 +93,6 @@ class ICICIDirectAPI:
             "exchange_code": exchange_code
         }
         
-        # Add optional parameters if provided
         if expiry_date:
             payload["expiry_date"] = expiry_date
         if product_type:
@@ -113,25 +104,9 @@ class ICICIDirectAPI:
             
         return self.make_request("GET", "/breezeapi/api/v1/quotes", json.dumps(payload))
     
-    def get_funds(self):
-        """Get fund details"""
-        return self.make_request("GET", "/breezeapi/api/v1/funds", json.dumps({}))
-    
-    def get_margin(self, exchange_code):
-        """Get margin information for a specific exchange"""
-        payload = {
-            "exchange_code": exchange_code
-        }
-        return self.make_request("GET", "/breezeapi/api/v1/margin", json.dumps(payload))
-    
     def place_order(self, order_details):
         """Place a new order"""
         return self.make_request("POST", "/breezeapi/api/v1/order", order_details)
-    
-    def modify_order(self, order_id, modified_details):
-        """Modify an existing order"""
-        modified_details["order_id"] = order_id
-        return self.make_request("PUT", "/breezeapi/api/v1/order", modified_details)
     
     def cancel_order(self, order_id, exchange_code):
         """Cancel an existing order"""
@@ -140,36 +115,3 @@ class ICICIDirectAPI:
             "exchange_code": exchange_code
         }
         return self.make_request("DELETE", "/breezeapi/api/v1/order", payload)
-    
-    def get_order_details(self, order_id, exchange_code):
-        """Get details of a specific order"""
-        payload = {
-            "exchange_code": exchange_code,
-            "order_id": order_id
-        }
-        return self.make_request("GET", "/breezeapi/api/v1/order", payload)
-    
-    def get_order_list(self, exchange_code, from_date=None, to_date=None):
-        """Get the list of all orders"""
-        payload = {
-            "exchange_code": exchange_code
-        }
-        
-        # Add date range if provided
-        if from_date and to_date:
-            payload["from_date"] = from_date
-            payload["to_date"] = to_date
-            
-        return self.make_request("GET", "/breezeapi/api/v1/order", payload)
-    
-    def get_portfolio_positions(self):
-        """Get the current portfolio positions"""
-        return self.make_request("GET", "/breezeapi/api/v1/portfoliopositions", json.dumps({}))
-    
-    def get_portfolio_holdings(self):
-        """Get the current portfolio holdings"""
-        return self.make_request("GET", "/breezeapi/api/v1/portfolioholdings", json.dumps({"exchange_code": "NSE"}))
-    
-    def square_off_position(self, square_off_details):
-        """Square off an existing position"""
-        return self.make_request("POST", "/breezeapi/api/v1/squareoff", square_off_details)

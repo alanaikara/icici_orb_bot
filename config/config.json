@@ -1,10 +1,10 @@
 {
     "stocks": [
-        "RELIANCE",
-        "HDFCBANK",
-        "TCS",
-        "INFY",
-        "ICICIBANK"
+        "UNIBAN",
+        "BHAELE",
+        "TRENT",
+        "MACDEV",
+        "VARBEV"
     ],
     "capital": 100000,
     "max_risk_per_trade": 1000,

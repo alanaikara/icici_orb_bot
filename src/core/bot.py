@@ -26,7 +26,10 @@ class ORBTradingBot:
                 logger.error(f"API Error: {customer_details['Error']}")
             raise Exception(error_msg)
             
-        logger.info(f"Session token obtained successfully: {self.api.session_token[:10]}...")
+        logger.info(f"Session token obtained successfully")
+        
+        # Connect to Breeze websocket for real-time data
+        self.api.connect_websocket()
         
         self.config_path = config_path
         self.load_config()
@@ -69,7 +72,7 @@ class ORBTradingBot:
                     "market_open_time": "09:15:00",
                     "market_close_time": "15:30:00",
                     "exchange_code": "NSE",
-                    "product_type": "cash",
+                    "product_type": "margin", # Changed from 'cash' to 'margin' for Breeze API
                     "brokerage_rate": 0.0001,
                     "stt_rate": 0.00025,
                     "disable_weekend_trading": True,
@@ -152,7 +155,7 @@ class ORBTradingBot:
                 "to_date": to_date,
                 "stock_code": stock_code,
                 "exchange_code": self.config["exchange_code"],
-                "product_type": self.config["product_type"]
+                "product_type": "cash"  # Breeze API expects "cash" for equities
             }
             
             data = self.api.get_historical_data(params)
@@ -548,6 +551,9 @@ class ORBTradingBot:
         
         # Wait for order queue to be processed
         self.order_queue.join()
+        
+        # Disconnect from websocket
+        self.api.disconnect_websocket()
         
         logger.info("ICICI Direct ORB Trading Bot stopped")
     

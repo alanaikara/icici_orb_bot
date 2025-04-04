@@ -2,18 +2,15 @@ import time
 import json
 import threading
 import os
-import sys
 import schedule
 import pandas as pd
 from queue import Queue
 from datetime import datetime, timedelta
 import logging
 
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.append(project_root)
-
-from src.api.icici_api import ICICIDirectAPI
-from src.core.risk_manager import RiskManager
+# Fix imports to be relative to the project structure
+from api.icici_api import ICICIDirectAPI
+from core.risk_manager import RiskManager
 
 logger = logging.getLogger("ICICI_ORB_Bot")
 
@@ -47,9 +44,10 @@ class ORBTradingBot:
         self.order_thread.daemon = True
         self.order_thread.start()
         
-        logger.info("ICICI Direct ORB Trading Bot initialized")
         # Initialize risk manager
         self.risk_manager = RiskManager(self.config, self.stocks_data)
+        
+        logger.info("ICICI Direct ORB Trading Bot initialized")
     
     def load_config(self):
         """Load bot configuration from file"""
@@ -61,21 +59,22 @@ class ORBTradingBot:
             else:
                 # Default configuration
                 self.config = {
-                    "stocks": ["RELIANCE", "HDFCBANK", "TCS", "INFY", "ICICIBANK"],  # Default stock list
+                    "stocks": ["RELIANCE", "HDFCBANK", "TCS", "INFY", "ICICIBANK"],
                     "capital": 100000,
                     "max_risk_per_trade": 1000,
                     "opening_range_minutes": 30,
-                    "max_opening_range_percent": 1.0,  # Maximum opening range as percentage
-                    "trade_exit_time": "15:14:00",  # Time to exit all trades
+                    "max_opening_range_percent": 1.0,
+                    "trade_exit_time": "15:14:00",
                     "market_open_time": "09:15:00",
                     "market_close_time": "15:30:00",
                     "exchange_code": "NSE",
                     "product_type": "cash",
-                    "brokerage_rate": 0.0001,  # 0.01%
-                    "stt_rate": 0.00025,  # 0.025%
+                    "brokerage_rate": 0.0001,
+                    "stt_rate": 0.00025,
                     "disable_weekend_trading": True,
-                    "paper_trading": True,  # Start in paper trading mode for safety
-                    "order_validity": "day",  # "day", "ioc", "vtc"
+                    "paper_trading": True,
+                    "order_validity": "day",
+                    "test_mode": False,  # Default to false for normal operation
                 }
                 self.save_config()
                 logger.info("Default configuration created")
@@ -86,9 +85,7 @@ class ORBTradingBot:
     def save_config(self):
         """Save bot configuration to file"""
         try:
-            # Ensure config directory exists
             os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-            
             with open(self.config_path, 'w') as f:
                 json.dump(self.config, f, indent=4)
             logger.info(f"Configuration saved to {self.config_path}")
@@ -103,6 +100,24 @@ class ORBTradingBot:
     
     def initialize_trading_day(self):
         """Initialize data for the trading day"""
+        # Check for test mode - skip time/day checks if in test mode
+        if self.config.get("test_mode", False):
+            logger.info("Test mode active: ignoring market hours and weekend restrictions")
+            # Reset trading state
+            self.stocks_data = {}
+            self.trading_active = True
+            self.market_open = True  # Force market to be considered open
+            
+            # Initialize data for each stock
+            self._initialize_stock_data()
+            
+            # For test mode, simulate opening ranges with random values
+            self._simulate_opening_ranges()
+            
+            logger.info(f"Test data initialized for {len(self.config['stocks'])} stocks")
+            return True
+            
+        # Normal operation checks
         # Skip if weekend and configured to disable weekend trading
         current_day = datetime.now().weekday()
         if self.config["disable_weekend_trading"] and current_day >= 5:  # 5, 6 = Saturday, Sunday
@@ -115,12 +130,19 @@ class ORBTradingBot:
         self.market_open = False
         
         # Initialize data for each stock
+        self._initialize_stock_data()
+        
+        logger.info(f"Trading day initialized for {len(self.config['stocks'])} stocks")
+        return True
+    
+    def _initialize_stock_data(self):
+        """Initialize data structure for each stock"""
         for stock in self.config["stocks"]:
             self.stocks_data[stock] = {
                 "opening_range_high": None,
                 "opening_range_low": None,
                 "opening_range_percent": None,
-                "position": None,  # None, 'LONG', or 'SHORT'
+                "position": None,
                 "entry_price": None,
                 "stop_loss": None,
                 "quantity": 0,
@@ -128,12 +150,36 @@ class ORBTradingBot:
                 "stop_loss_order_id": None,
                 "opening_range_calculated": False
             }
+    
+    def _simulate_opening_ranges(self):
+        """Simulate opening ranges for test mode"""
+        import random
         
-        logger.info(f"Trading day initialized for {len(self.config['stocks'])} stocks")
-        return True
+        for stock in self.config["stocks"]:
+            # Generate random base price between 100 and 1000
+            base_price = random.uniform(100, 1000)
+            
+            # Generate random high and low with a reasonable range
+            range_percent = random.uniform(0.5, 1.5)  # Between 0.5% and 1.5%
+            range_amount = base_price * (range_percent / 100)
+            
+            low = base_price - (range_amount / 2)
+            high = base_price + (range_amount / 2)
+            
+            # Store the simulated opening range
+            self.stocks_data[stock]["opening_range_high"] = high
+            self.stocks_data[stock]["opening_range_low"] = low
+            self.stocks_data[stock]["opening_range_percent"] = range_percent
+            self.stocks_data[stock]["opening_range_calculated"] = True
+            
+            logger.info(f"Test mode: Simulated opening range for {stock}: High={high:.2f}, Low={low:.2f}, Range={range_percent:.2f}%")
     
     def calculate_opening_range(self, stock_code):
         """Calculate opening range for a stock"""
+        # In test mode, opening ranges are already simulated
+        if self.config.get("test_mode", False):
+            return True
+            
         try:
             # Get current date string
             today = datetime.now().strftime("%Y-%m-%d")
@@ -205,7 +251,61 @@ class ORBTradingBot:
             logger.info(f"{stock_code} - Opening range {stock_data['opening_range_percent']:.2f}% too wide (>{self.config['max_opening_range_percent']}%). No trade.")
             return False
         
-        # Get current market data
+        # In test mode, simulate market conditions for entry
+        if self.config.get("test_mode", False):
+            import random
+            
+            # Randomly decide whether to enter a position
+            if random.random() < 0.3:  # 30% chance of entry
+                # Randomly decide long or short
+                is_long = random.random() < 0.5
+                
+                high = stock_data["opening_range_high"]
+                low = stock_data["opening_range_low"]
+                
+                if is_long:
+                    current_price = high * 1.01  # Price slightly above high
+                    stop_loss = low
+                    risk_per_share = current_price - stop_loss
+                    
+                    max_risk = self.config["max_risk_per_trade"]
+                    quantity = min(int(max_risk / risk_per_share), int(self.config["capital"] / current_price))
+                    
+                    if quantity > 0:
+                        # Set up long position
+                        stock_data["position"] = "LONG"
+                        stock_data["entry_price"] = current_price
+                        stock_data["stop_loss"] = stop_loss
+                        stock_data["quantity"] = quantity
+                        
+                        # Place the order
+                        self.place_entry_order(stock_code, "buy", quantity, current_price)
+                        
+                        logger.info(f"TEST MODE: {stock_code} - LONG Entry at {current_price:.2f}, SL: {stop_loss:.2f}, Qty: {quantity}, Risk: ₹{risk_per_share * quantity:.2f}")
+                        return True
+                else:
+                    current_price = low * 0.99  # Price slightly below low
+                    stop_loss = high
+                    risk_per_share = stop_loss - current_price
+                    
+                    max_risk = self.config["max_risk_per_trade"]
+                    quantity = min(int(max_risk / risk_per_share), int(self.config["capital"] / current_price))
+                    
+                    if quantity > 0:
+                        # Set up short position
+                        stock_data["position"] = "SHORT"
+                        stock_data["entry_price"] = current_price
+                        stock_data["stop_loss"] = stop_loss
+                        stock_data["quantity"] = quantity
+                        
+                        # Place the order
+                        self.place_entry_order(stock_code, "sell", quantity, current_price)
+                        
+                        logger.info(f"TEST MODE: {stock_code} - SHORT Entry at {current_price:.2f}, SL: {stop_loss:.2f}, Qty: {quantity}, Risk: ₹{risk_per_share * quantity:.2f}")
+                        return True
+            return False
+        
+        # Normal operation - Check current market data
         quotes_response = self.api.get_quotes(stock_code, self.config["exchange_code"])
         
         if 'Success' in quotes_response and quotes_response['Success']:
@@ -342,10 +442,11 @@ class ORBTradingBot:
                 order_type, stock_code, order_details = self.order_queue.get()
                 
                 # Process based on trading mode
-                if self.config["paper_trading"]:
+                if self.config["paper_trading"] or self.config.get("test_mode", False):
                     # Simulate order in paper trading mode
                     order_id = f"paper_{order_type}_{stock_code}_{int(time.time())}"
-                    logger.info(f"PAPER TRADING - {order_type} order for {stock_code}: {order_details}")
+                    mode = "TEST MODE" if self.config.get("test_mode", False) else "PAPER TRADING"
+                    logger.info(f"{mode} - {order_type} order for {stock_code}: {order_details}")
                     
                     # Update stock data with simulated order ID
                     if order_type == "ENTRY":
@@ -383,18 +484,54 @@ class ORBTradingBot:
     
     def check_positions(self):
         """Check and manage open positions"""
-        # Get current position data from the broker
+        # For test mode, simulate random price movements and occasionally trigger stop loss
+        if self.config.get("test_mode", False):
+            import random
+            
+            for stock_code, stock_data in self.stocks_data.items():
+                if stock_data["position"] is not None:
+                    # Randomly decide if stop loss is hit (5% chance)
+                    if random.random() < 0.05:
+                        logger.info(f"TEST MODE: {stock_code} - Stop loss triggered at {stock_data['stop_loss']}")
+                        self.place_exit_order(stock_code)
+                        
+                        # Reset position data
+                        stock_data["position"] = None
+                        stock_data["entry_price"] = None
+                        stock_data["stop_loss"] = None
+                        stock_data["quantity"] = 0
+                        stock_data["order_id"] = None
+                        stock_data["stop_loss_order_id"] = None
+                        continue
+                        
+                    # Check if it's time for the time-based exit
+                    current_time = datetime.now().strftime("%H:%M:%S")
+                    exit_time = self.config["trade_exit_time"]
+                    
+                    if current_time >= exit_time:
+                        logger.info(f"TEST MODE: {stock_code} - Time-based exit at {current_time}")
+                        self.place_exit_order(stock_code)
+                        
+                        # Reset position data
+                        stock_data["position"] = None
+                        stock_data["entry_price"] = None
+                        stock_data["stop_loss"] = None
+                        stock_data["quantity"] = 0
+                        stock_data["order_id"] = None
+                        stock_data["stop_loss_order_id"] = None
+            
+            return
+            
+        # Normal operation - get current position data from the broker
         if not self.config["paper_trading"]:
             positions_response = self.api.get_portfolio_positions()
             
-            # Process real positions data here
-            # This would include checking if stop loss orders were triggered
-            # and updating self.stocks_data accordingly
+            # Process real positions data if available
             if 'Success' in positions_response and positions_response['Success']:
                 for position in positions_response['Success']:
                     stock_code = position.get('stock_code')
                     if stock_code in self.stocks_data and self.stocks_data[stock_code]["position"] is not None:
-                        # Update any position data if needed
+                        # Update position data if needed
                         pass
         
         # For each stock in a position, check if exit conditions are met
@@ -410,7 +547,6 @@ class ORBTradingBot:
                     
                     # Cancel stop loss order if it exists
                     if stock_data["stop_loss_order_id"] is not None and not self.config["paper_trading"]:
-                        # In real trading, cancel the stop loss order
                         self.api.cancel_order(stock_data["stop_loss_order_id"], self.config["exchange_code"])
                     
                     # Reset position data
@@ -423,6 +559,14 @@ class ORBTradingBot:
     
     def update_market_status(self):
         """Update market open/close status"""
+        # In test mode, market is always considered open
+        if self.config.get("test_mode", False):
+            if not self.market_open:
+                self.market_open = True
+                logger.info("TEST MODE: Market is now considered open")
+            return
+            
+        # Normal operation - check actual market hours
         current_time = datetime.now().strftime("%H:%M:%S")
         market_open_time = self.config["market_open_time"]
         market_close_time = self.config["market_close_time"]
@@ -465,12 +609,16 @@ class ORBTradingBot:
     def run_trading_cycle(self):
         """Run a single trading cycle"""
         if not self.trading_active:
+            logger.info("Trading cycle skipped: trading not active")
             return
         
         self.update_market_status()
         
-        if not self.market_open:
+        if not self.market_open and not self.config.get("test_mode", False):
+            logger.info("Trading cycle skipped: market not open")
             return
+        
+        logger.info("Running trading cycle")
         
         # Check for entry conditions for each stock
         for stock_code in self.config["stocks"]:
@@ -499,16 +647,39 @@ class ORBTradingBot:
             logger.info("Trading day initialization failed. Bot will not trade today.")
             return
         
-        # Schedule the trading cycle to run every minute
-        schedule.every(1).minutes.do(self.run_trading_cycle)
+        # For test mode, add a shorter run time to avoid hanging
+        if self.config.get("test_mode", False):
+            max_run_minutes = 5  # Run for 5 minutes in test mode
+            logger.info(f"Test mode: Bot will run for {max_run_minutes} minutes maximum")
+        else:
+            # Schedule the trading cycle to run every minute
+            schedule.every(1).minutes.do(self.run_trading_cycle)
         
         # Run the first cycle immediately
+        logger.info("Running first trading cycle")
         self.run_trading_cycle()
+        
+        # Start time for test mode timeout
+        start_time = time.time()
         
         try:
             # Keep running until end of day or manual stop
+            logger.info("Entering main trading loop")
             while self.trading_active:
                 schedule.run_pending()
+                
+                # In test mode, run a cycle every 30 seconds instead of waiting for schedule
+                if self.config.get("test_mode", False):
+                    if (time.time() - start_time) % 30 < 1:  # Every ~30 seconds
+                        logger.info("Test mode: Running additional trading cycle")
+                        self.run_trading_cycle()
+                    
+                    # Exit after max_run_minutes in test mode to avoid hanging
+                    if time.time() - start_time > max_run_minutes * 60:
+                        logger.info(f"Test mode: Maximum run time of {max_run_minutes} minutes reached")
+                        self.trading_active = False
+                        break
+                
                 time.sleep(1)
         
         except KeyboardInterrupt:
@@ -543,6 +714,7 @@ class ORBTradingBot:
             "trading_active": self.trading_active,
             "market_open": self.market_open,
             "paper_trading": self.config["paper_trading"],
+            "test_mode": self.config.get("test_mode", False),
             "last_update": self.last_update_time.strftime("%Y-%m-%d %H:%M:%S") if self.last_update_time else None,
             "monitored_stocks": len(self.config["stocks"]),
             "open_positions": sum(1 for stock_data in self.stocks_data.values() if stock_data["position"] is not None),

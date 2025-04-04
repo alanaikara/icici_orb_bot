@@ -13,7 +13,6 @@ def main():
     parser.add_argument('--config', default='config/config.json', help='Path to configuration file')
     parser.add_argument('--paper', action='store_true', help='Enable paper trading mode')
     parser.add_argument('--live', action='store_true', help='Enable live trading mode')
-    parser.add_argument('--test', action='store_true', help='Enable test mode (ignores market hours)')
     args = parser.parse_args()
     
     # Set up logger
@@ -29,7 +28,7 @@ def main():
     
     if not all([app_key, secret_key, api_session]):
         logger.error("Missing API credentials. Please set ICICI_APP_KEY, ICICI_SECRET_KEY, and ICICI_API_SESSION in your .env file.")
-        return None
+        return
     
     try:
         # Create and initialize the bot
@@ -42,24 +41,15 @@ def main():
         elif args.live:
             bot.update_config({"paper_trading": False})
             logger.info("Live trading mode enabled")
-            
-        # Enable test mode if requested
-        if args.test:
-            bot.update_config({"test_mode": True})
-            logger.info("Test mode enabled - will ignore market hours")
         
         # Start the bot
         bot.start()
-        
-        return bot
         
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Error running bot: {e}")
         raise
-    
-    return None
 
 if __name__ == "__main__":
     main()

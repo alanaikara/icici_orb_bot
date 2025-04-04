@@ -117,6 +117,13 @@ class ICICIDirectAPI:
         """Get fund details"""
         return self.make_request("GET", "/breezeapi/api/v1/funds", json.dumps({}))
     
+    def get_margin(self, exchange_code):
+        """Get margin information for a specific exchange"""
+        payload = {
+            "exchange_code": exchange_code
+        }
+        return self.make_request("GET", "/breezeapi/api/v1/margin", json.dumps(payload))
+    
     def place_order(self, order_details):
         """Place a new order"""
         return self.make_request("POST", "/breezeapi/api/v1/order", order_details)

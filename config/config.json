@@ -28,5 +28,7 @@
     "max_consecutive_losses": 3,
     "max_drawdown_percent": 5,
     "circuit_breaker_enabled": true,
-    "test_mode": true
+    "test_mode": false,
+    "margin_requirement_percent": 20,
+    "skip_margin_check": false
 }

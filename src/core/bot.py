@@ -7,6 +7,9 @@ import pandas as pd
 from queue import Queue
 from datetime import datetime, timedelta
 import logging
+from utils.portfolio_tracker import PortfolioTracker
+
+
 
 # Fix imports to be relative to the project structure
 from api.icici_api import ICICIDirectAPI
@@ -29,6 +32,8 @@ class ORBTradingBot:
         
         self.config_path = config_path
         self.load_config()
+
+        self.portfolio_tracker = PortfolioTracker(self.api, self.config)
         
         # Trading state variables
         self.stocks_data = {}  # Store stock data, opening ranges, positions, etc.
@@ -49,6 +54,7 @@ class ORBTradingBot:
         
         logger.info("ICICI Direct ORB Trading Bot initialized")
     
+            
     def load_config(self):
         """Load bot configuration from file"""
         try:
@@ -634,6 +640,13 @@ class ORBTradingBot:
         
         # Check and manage open positions
         self.check_positions()
+
+        # Update portfolio data
+        self.portfolio_tracker.update_all()
+        
+        # You can log or use the PnL data
+        pnl_summary = self.portfolio_tracker.get_pnl_summary()
+        logger.info(f"Current P&L: ₹{pnl_summary['daily_pnl']:.2f}")
         
         # Update last cycle time
         self.last_update_time = datetime.now()
@@ -691,7 +704,7 @@ class ORBTradingBot:
         finally:
             # Clean up and exit any open positions
             self.stop()
-    
+
     def stop(self):
         """Stop the trading bot and clean up"""
         logger.info("Stopping ICICI Direct ORB Trading Bot")

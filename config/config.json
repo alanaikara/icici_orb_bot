@@ -30,5 +30,30 @@
     "circuit_breaker_enabled": true,
     "test_mode": false,
     "margin_requirement_percent": 20,
-    "skip_margin_check": false
+    "skip_margin_check": false,
+
+    "nifty_50_stocks": [
+        "ADAENT", "ADAPOR", "APOHOS", "ASIPAI", "AXIBAN",
+        "BAAUTO", "BAJFI", "BAFINS", "BHAPET", "BHAAIR",
+        "BRIIND", "CIPLA", "COALIN", "DIVLAB", "DRREDD",
+        "EICMOT", "GRASIM", "HCLTEC", "HDFBAN", "HDFSTA",
+        "HERHON", "HINDAL", "HINLEV", "ICIBAN", "ITC",
+        "INDBA", "INFTEC", "JSWSTE", "KOTMAH", "LARTOU",
+        "LTINFO", "MAHMAH", "MARUTI", "NTPC", "NESIND",
+        "ONGC", "POWGRI", "RELIND", "SBILIF", "STABAN",
+        "SUNPHA", "TCS", "TATGLO", "TATMOT", "TATSTE",
+        "TECMAH", "TITIND", "ULTCEM", "WIPRO", "SHRTRA"
+    ],
+
+    "backtest": {
+        "db_path": "Data/backtest.db",
+        "start_date": "2021-02-09",
+        "end_date": "2026-02-09",
+        "interval": "1minute",
+        "chunk_days": 2,
+        "calls_per_minute": 95,
+        "calls_per_day": 4900,
+        "max_retries": 3,
+        "retry_base_delay": 5
+    }
 }

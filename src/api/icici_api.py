@@ -14,32 +14,52 @@ class ICICIDirectAPI:
         self.session_token = session_token
         self.breeze = BreezeConnect(api_key=app_key)
         self.is_connected = False
-    
+
+        
     def get_customer_details(self, api_session, app_key):
         """Generate session using Breeze Connect and get customer details"""
         try:
+            # Validate input parameters
+            if not all([self.secret_key, api_session, app_key]):
+                raise ValueError("Missing required authentication parameters")
+
             # Generate session
-            self.breeze.generate_session(api_secret=self.secret_key, session_token=api_session)
-            
+            self.breeze.generate_session(
+                api_secret=self.secret_key, 
+                session_token=api_session
+            )
+
             # Set the session token for future API calls
             self.session_token = api_session
             self.is_connected = True
+
+            # Get customer details from funds API
+            funds_response = self.breeze.get_funds()
             
-            # Get customer details from Breeze
+            if not funds_response or 'Success' not in funds_response:
+                raise Exception("Failed to retrieve customer funds details")
+
+            # Construct customer details response
             customer_details = {
                 'Success': {
                     'session_token': api_session,
-                    'idirect_user_name': 'User', # This would be populated with actual user details in real response
-                    'idirect_userid': 'User',
-                    'exg_status': self.breeze.get_funds().get('Success', {}).get('segments_allowed', {})
+                    'idirect_user_name': funds_response['Success'].get('bank_account', 'Unknown User'),
+                    'idirect_userid': funds_response['Success'].get('unallocated_balance', 'Unknown'),
+                    'exg_status': funds_response['Success'].get('segments_allowed', {})
                 },
                 'Status': 200,
                 'Error': None
             }
+            
             return customer_details
+
         except Exception as e:
             logger.error(f"Failed to generate session: {e}")
-            return {'Success': None, 'Status': 500, 'Error': str(e)}
+            return {
+                'Success': None, 
+                'Status': 500, 
+                'Error': str(e)
+            }
     
     def connect_websocket(self):
         """Connect to Breeze websocket for real-time data"""
@@ -109,7 +129,40 @@ class ICICIDirectAPI:
         except Exception as e:
             logger.error(f"Error fetching historical data: {e}")
             return {'Success': None, 'Status': 500, 'Error': str(e)}
-    
+
+    def get_historical_data_v2(self, params):
+        """Get historical data using Breeze API v2 endpoint (supports 1second interval)"""
+        try:
+            if not self.is_connected:
+                return {'Success': None, 'Status': 401, 'Error': 'Not authenticated'}
+
+            interval = params.get('interval', '1minute')
+            from_date = params.get('from_date', '')
+            to_date = params.get('to_date', '')
+            stock_code = params.get('stock_code', '')
+            exchange_code = params.get('exchange_code', 'NSE')
+            product_type = params.get('product_type', 'cash').lower()
+            expiry_date = params.get('expiry_date', '')
+            right = params.get('right', 'others')
+            strike_price = params.get('strike_price', '')
+
+            response = self.breeze.get_historical_data_v2(
+                interval=interval,
+                from_date=from_date,
+                to_date=to_date,
+                stock_code=stock_code,
+                exchange_code=exchange_code,
+                product_type=product_type,
+                expiry_date=expiry_date,
+                right=right,
+                strike_price=strike_price
+            )
+
+            return response
+        except Exception as e:
+            logger.error(f"Error fetching historical data v2: {e}")
+            return {'Success': None, 'Status': 500, 'Error': str(e)}
+
     def get_quotes(self, stock_code, exchange_code, expiry_date=None, product_type=None, right=None, strike_price=None):
         """Get current market quotes for a stock using Breeze API"""
         try:

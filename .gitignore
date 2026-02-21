@@ -13,6 +13,9 @@ logs/
 
 # SQLite databases (runtime data)
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 
 # Distribution / packaging
 dist/

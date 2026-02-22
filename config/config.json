@@ -55,5 +55,16 @@
         "calls_per_day": 4900,
         "max_retries": 3,
         "retry_base_delay": 5
+    },
+
+    "backtest_sweep": {
+        "results_db_path": "Data/backtest_results.db",
+        "capital": 100000,
+        "max_risk_per_trade": 1000,
+        "brokerage_rate": 0.0001,
+        "stt_rate": 0.00025,
+        "trailing_stop_pct": 0.5,
+        "atr_multiplier": 1.5,
+        "atr_period": 14
     }
 }

@@ -17,6 +17,9 @@ logs/
 *.db-wal
 *.db-journal
 
+# Generated reports and backtest outputs
+Reports/
+
 # Distribution / packaging
 dist/
 build/

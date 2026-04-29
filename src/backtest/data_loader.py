@@ -38,6 +38,10 @@ class StockData:
         # Previous day close (for gap filter if needed later)
         self.prev_close: dict[str, float] = {}
 
+        # 5-min OHLC with MACD columns, per day (optional — only if compute_macd=True)
+        # Key: date_str, Value: DataFrame with [time_str, macd, signal, histogram]
+        self.macd_5min: dict[str, pd.DataFrame] = {}
+
 
 class DataLoader:
     """
@@ -53,6 +57,10 @@ class DataLoader:
         start_date: str = None,
         end_date: str = None,
         or_minutes_list: list[int] = None,
+        compute_macd: bool = False,
+        macd_fast: int = 12,
+        macd_slow: int = 26,
+        macd_signal: int = 9,
     ) -> StockData:
         """
         Load and precompute all data for a single stock.
@@ -103,6 +111,12 @@ class DataLoader:
         stock_data.prev_close = self._compute_prev_close(
             stock_data.day_groups, stock_data.trading_days
         )
+
+        # 6. Optionally compute 5-min MACD (for Fib-MACD strategy)
+        if compute_macd:
+            stock_data.macd_5min = self._compute_5min_macd(
+                stock_data.df, macd_fast, macd_slow, macd_signal
+            )
 
         return stock_data
 
@@ -265,3 +279,70 @@ class DataLoader:
             prev_df = day_groups[prev_day]
             result[trading_days[i]] = prev_df['close'].iloc[-1]
         return result
+
+    def _compute_5min_macd(
+        self,
+        df: pd.DataFrame,
+        fast: int = 12,
+        slow: int = 26,
+        signal_period: int = 9,
+    ) -> dict[str, pd.DataFrame]:
+        """
+        Resample 1-min OHLC to 5-min bars and compute MACD.
+
+        EMA state carries across session boundaries so MACD values
+        are stable from the first candle of each day (no cold-start bias).
+
+        Returns:
+            dict[date_str -> DataFrame[time_str, macd, signal, histogram]]
+        """
+        if df is None or df.empty:
+            return {}
+
+        work = df[['datetime', 'date_str', 'open', 'high', 'low', 'close', 'volume']].copy()
+        work['datetime'] = pd.to_datetime(work['datetime'])
+        work = work.set_index('datetime').sort_index()
+
+        # Resample to 5-min, aggregating OHLCV within each calendar day
+        # (label='left' means the bar is named by its open time)
+        resampled = (
+            work.groupby('date_str')
+            .apply(lambda g: g.resample('5min').agg(
+                open=('open', 'first'),
+                high=('high', 'max'),
+                low=('low', 'min'),
+                close=('close', 'last'),
+                volume=('volume', 'sum'),
+            ).dropna(subset=['close']))
+            .reset_index(level=0)
+            .rename(columns={'date_str': '_date'})
+        )
+        resampled = resampled.sort_index()
+
+        # Compute MACD on continuous close series (EMA persists across days)
+        closes = resampled['close'].values
+        ema_fast = self._ema_series(closes, fast)
+        ema_slow = self._ema_series(closes, slow)
+        macd_line = ema_fast - ema_slow
+        signal_line = self._ema_series(macd_line, signal_period)
+        histogram = macd_line - signal_line
+
+        resampled['macd'] = macd_line
+        resampled['signal'] = signal_line
+        resampled['histogram'] = histogram
+        resampled['time_str'] = resampled.index.strftime('%H:%M:%S')
+
+        # Split back per day
+        result: dict[str, pd.DataFrame] = {}
+        for date_str, group in resampled.groupby('_date'):
+            result[date_str] = (
+                group[['time_str', 'macd', 'signal', 'histogram']]
+                .reset_index(drop=True)
+            )
+
+        return result
+
+    @staticmethod
+    def _ema_series(values: np.ndarray, period: int) -> np.ndarray:
+        """Exponential moving average using pandas ewm (standard EMA formula)."""
+        return pd.Series(values).ewm(span=period, adjust=False).mean().values

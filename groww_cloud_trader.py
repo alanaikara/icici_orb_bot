@@ -709,12 +709,6 @@ class GrowwBroker:
                         and c[3] is None and c[4] is None):
                     premarket_skipped += 1
                     continue
-                # Groww sometimes sends the 09:15 candle with open=None but
-                # valid high/low/close. Substitute open with close so the candle
-                # is usable rather than discarded as a parse error.
-                if len(c) >= 5 and c[1] is None and c[4] is not None:
-                    c = list(c)
-                    c[1] = c[4]
                 try:
                     # Groww returns timestamps in two formats depending on
                     # API version: ISO-8601 string ("2026-04-30T09:15:00")
@@ -790,35 +784,30 @@ class GrowwBroker:
             f"get_ltp_batch: requesting {len(exchange_syms)} symbols — "
             f"{', '.join(exchange_syms[:5])}{'...' if len(exchange_syms) > 5 else ''}"
         )
-        for attempt in range(2):
-            try:
-                resp = self._g.get_ltp(
-                    segment                  = self._g.SEGMENT_CASH,
-                    exchange_trading_symbols = exchange_syms,
-                )
-                result: dict[str, float] = {}
-                if isinstance(resp, dict):
-                    for k, v in resp.items():
-                        sym = k.replace("NSE_", "", 1)   # "NSE_SBIN" → "SBIN"
-                        if isinstance(v, (int, float)):
-                            result[sym] = float(v)
-                        elif isinstance(v, dict):
-                            result[sym] = float(v.get("ltp") or 0)
-                        else:
-                            result[sym] = float(_attr(v, "ltp") or 0)
-                # Warn on symbols that came back missing or zero
-                missing = [s for s in symbols if result.get(s, 0) == 0]
-                if missing:
-                    logger.warning(f"get_ltp_batch: {len(missing)} symbols missing/zero: {missing}")
-                logger.debug(f"get_ltp_batch: {len(result)} prices received — sample: {dict(list(result.items())[:4])}")
-                return result
-            except Exception as e:
-                if attempt == 0:
-                    logger.warning(f"get_ltp_batch: {e} — retrying once")
-                    time.sleep(1)
-                else:
-                    logger.error(f"get_ltp_batch: {e}")
-        return {}
+        try:
+            resp = self._g.get_ltp(
+                segment                  = self._g.SEGMENT_CASH,
+                exchange_trading_symbols = exchange_syms,
+            )
+            result: dict[str, float] = {}
+            if isinstance(resp, dict):
+                for k, v in resp.items():
+                    sym = k.replace("NSE_", "", 1)   # "NSE_SBIN" → "SBIN"
+                    if isinstance(v, (int, float)):
+                        result[sym] = float(v)
+                    elif isinstance(v, dict):
+                        result[sym] = float(v.get("ltp") or 0)
+                    else:
+                        result[sym] = float(_attr(v, "ltp") or 0)
+            # Warn on symbols that came back missing or zero
+            missing = [s for s in symbols if result.get(s, 0) == 0]
+            if missing:
+                logger.warning(f"get_ltp_batch: {len(missing)} symbols missing/zero: {missing}")
+            logger.debug(f"get_ltp_batch: {len(result)} prices received — sample: {dict(list(result.items())[:4])}")
+            return result
+        except Exception as e:
+            logger.error(f"get_ltp_batch: {e}")
+            return {}
 
     def place_market_order(self, symbol: str, action: str, qty: int,
                            ref_id: Optional[str] = None) -> OrderResult:

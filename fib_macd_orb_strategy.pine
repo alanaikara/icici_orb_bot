@@ -284,10 +284,10 @@ if barstate.isconfirmed
                 // Dashed OR level lines extend rightward as breakout reference
                 line.delete(ln_or_h)
                 line.delete(ln_or_l)
-                ln_or_h := line.new(bar_index - 1, or_h, bar_index + 300, or_h,
-                                    color=color.new(#2962ff, 50), width=1, style=line.style_dashed)
-                ln_or_l := line.new(bar_index - 1, or_l, bar_index + 300, or_l,
-                                    color=color.new(#2962ff, 50), width=1, style=line.style_dashed)
+                ln_or_h := line.new(bar_index - 1, or_h, bar_index, or_h,
+                                    color=color.new(#2962ff, 50), width=1, style=line.style_dashed, extend=extend.right)
+                ln_or_l := line.new(bar_index - 1, or_l, bar_index, or_l,
+                                    color=color.new(#2962ff, 50), width=1, style=line.style_dashed, extend=extend.right)
 
     // ── WAIT_BREAKOUT ────────────────────────────────────────────────────────
     if state == "WAIT_BREAKOUT" and not is_exit_bar
@@ -347,14 +347,13 @@ if barstate.isconfirmed
                         label.delete(lb_fentry), label.delete(lb_f786)
                         label.delete(lb_f0)
                         int x1 = swing_conf_bar
-                        int x2 = bar_index + 200
-                        ln_f100      := line.new(x1, f100, x2, f100, color=color.new(i_c_long, 55), width=1, style=line.style_dotted)
-                        ln_f382      := line.new(x1, f382, x2, f382, color=color.new(i_c_fib,  70), width=1, style=line.style_dotted)
-                        ln_f500      := line.new(x1, f500, x2, f500, color=color.new(i_c_fib,  70), width=1, style=line.style_dotted)
-                        ln_f618      := line.new(x1, f618, x2, f618, color=color.new(i_c_fib,  70), width=1, style=line.style_dotted)
-                        ln_f786      := line.new(x1, f786, x2, f786, color=color.new(i_c_sl,   50), width=1, style=line.style_dashed)
-                        ln_f0        := line.new(x1, f0,   x2, f0,   color=color.new(i_c_long, 55), width=1, style=line.style_dotted)
-                        ln_entry_fib := line.new(x1, f_entry, x2, f_entry, color=i_c_fib, width=2, style=line.style_solid)
+                        ln_f100      := line.new(x1, f100,    x1 + 1, f100,    color=color.new(i_c_long, 55), width=1, style=line.style_dotted,  extend=extend.right)
+                        ln_f382      := line.new(x1, f382,    x1 + 1, f382,    color=color.new(i_c_fib,  70), width=1, style=line.style_dotted,  extend=extend.right)
+                        ln_f500      := line.new(x1, f500,    x1 + 1, f500,    color=color.new(i_c_fib,  70), width=1, style=line.style_dotted,  extend=extend.right)
+                        ln_f618      := line.new(x1, f618,    x1 + 1, f618,    color=color.new(i_c_fib,  70), width=1, style=line.style_dotted,  extend=extend.right)
+                        ln_f786      := line.new(x1, f786,    x1 + 1, f786,    color=color.new(i_c_sl,   50), width=1, style=line.style_dashed,  extend=extend.right)
+                        ln_f0        := line.new(x1, f0,      x1 + 1, f0,      color=color.new(i_c_long, 55), width=1, style=line.style_dotted,  extend=extend.right)
+                        ln_entry_fib := line.new(x1, f_entry, x1 + 1, f_entry, color=i_c_fib,                width=2, style=line.style_solid,   extend=extend.right)
                         // Labels
                         lb_swing  := label.new(bar_index, swing_val,
                                                "Swing High\n" + str.tostring(swing_val, format.mintick),
@@ -393,14 +392,13 @@ if barstate.isconfirmed
                         label.delete(lb_fentry), label.delete(lb_f786)
                         label.delete(lb_f0)
                         int x1 = swing_conf_bar
-                        int x2 = bar_index + 200
-                        ln_f100      := line.new(x1, f100, x2, f100, color=color.new(i_c_short, 55), width=1, style=line.style_dotted)
-                        ln_f382      := line.new(x1, f382, x2, f382, color=color.new(i_c_fib,   70), width=1, style=line.style_dotted)
-                        ln_f500      := line.new(x1, f500, x2, f500, color=color.new(i_c_fib,   70), width=1, style=line.style_dotted)
-                        ln_f618      := line.new(x1, f618, x2, f618, color=color.new(i_c_fib,   70), width=1, style=line.style_dotted)
-                        ln_f786      := line.new(x1, f786, x2, f786, color=color.new(i_c_sl,    50), width=1, style=line.style_dashed)
-                        ln_f0        := line.new(x1, f0,   x2, f0,   color=color.new(i_c_short, 55), width=1, style=line.style_dotted)
-                        ln_entry_fib := line.new(x1, f_entry, x2, f_entry, color=i_c_fib, width=2, style=line.style_solid)
+                        ln_f100      := line.new(x1, f100,    x1 + 1, f100,    color=color.new(i_c_short, 55), width=1, style=line.style_dotted,  extend=extend.right)
+                        ln_f382      := line.new(x1, f382,    x1 + 1, f382,    color=color.new(i_c_fib,   70), width=1, style=line.style_dotted,  extend=extend.right)
+                        ln_f500      := line.new(x1, f500,    x1 + 1, f500,    color=color.new(i_c_fib,   70), width=1, style=line.style_dotted,  extend=extend.right)
+                        ln_f618      := line.new(x1, f618,    x1 + 1, f618,    color=color.new(i_c_fib,   70), width=1, style=line.style_dotted,  extend=extend.right)
+                        ln_f786      := line.new(x1, f786,    x1 + 1, f786,    color=color.new(i_c_sl,    50), width=1, style=line.style_dashed,  extend=extend.right)
+                        ln_f0        := line.new(x1, f0,      x1 + 1, f0,      color=color.new(i_c_short, 55), width=1, style=line.style_dotted,  extend=extend.right)
+                        ln_entry_fib := line.new(x1, f_entry, x1 + 1, f_entry, color=i_c_fib,                 width=2, style=line.style_solid,   extend=extend.right)
                         lb_swing  := label.new(bar_index, swing_val,
                                                "Swing Low\n" + str.tostring(swing_val, format.mintick),
                                                color=color.new(i_c_short, 60), textcolor=color.white,
@@ -433,10 +431,10 @@ if barstate.isconfirmed
                     // Draw SL and TP lines
                     line.delete(ln_sl), line.delete(ln_tp)
                     label.delete(lb_entry)
-                    ln_sl    := line.new(bar_index, sl_px, bar_index + 300, sl_px,
-                                         color=i_c_sl, width=2, style=line.style_dashed)
-                    ln_tp    := line.new(bar_index, tp_px, bar_index + 300, tp_px,
-                                         color=i_c_tp, width=2, style=line.style_dashed)
+                    ln_sl    := line.new(bar_index, sl_px, bar_index + 1, sl_px,
+                                         color=i_c_sl, width=2, style=line.style_dashed, extend=extend.right)
+                    ln_tp    := line.new(bar_index, tp_px, bar_index + 1, tp_px,
+                                         color=i_c_tp, width=2, style=line.style_dashed, extend=extend.right)
                     lb_entry := label.new(bar_index, low * 0.9995,
                                           "BUY @ " + str.tostring(entry_px, format.mintick) +
                                           "\nSL "  + str.tostring(sl_px,    format.mintick) +
@@ -463,10 +461,10 @@ if barstate.isconfirmed
                     state       := "IN_TRADE"
                     line.delete(ln_sl), line.delete(ln_tp)
                     label.delete(lb_entry)
-                    ln_sl    := line.new(bar_index, sl_px, bar_index + 300, sl_px,
-                                         color=i_c_sl, width=2, style=line.style_dashed)
-                    ln_tp    := line.new(bar_index, tp_px, bar_index + 300, tp_px,
-                                         color=i_c_tp, width=2, style=line.style_dashed)
+                    ln_sl    := line.new(bar_index, sl_px, bar_index + 1, sl_px,
+                                         color=i_c_sl, width=2, style=line.style_dashed, extend=extend.right)
+                    ln_tp    := line.new(bar_index, tp_px, bar_index + 1, tp_px,
+                                         color=i_c_tp, width=2, style=line.style_dashed, extend=extend.right)
                     lb_entry := label.new(bar_index, high * 1.0005,
                                           "SELL @ " + str.tostring(entry_px, format.mintick) +
                                           "\nSL "   + str.tostring(sl_px,    format.mintick) +

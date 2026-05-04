@@ -559,16 +559,19 @@ if barstate.islast and i_show_dash
                text_size=size.normal,  text_halign=text.align_center)
 
     // State row
-    color s_col = state == "IN_TRADE" ? color.new(i_c_long, 40) :
-                  state == "DONE"     ? color.new(color.gray, 55) :
-                  state == "BUILD_OR" ? color.new(color.blue,  55) :
-                                        color.new(color.black, 60)
+    color s_col = switch state
+        "IN_TRADE" => color.new(i_c_long,       40)
+        "DONE"     => color.new(color.gray,      55)
+        "BUILD_OR" => color.new(color.blue,      55)
+        =>            color.new(color.black,     60)
     table.cell(dash, 0, 1, "State",    text_color=color.new(color.white, 30), bgcolor=color.new(color.black, 70), text_size=size.small)
     table.cell(dash, 1, 1, state,      text_color=color.white, bgcolor=s_col, text_size=size.small)
 
     // Direction
-    color d_col = brk_dir == "LONG"  ? color.new(i_c_long,  40) :
-                  brk_dir == "SHORT" ? color.new(i_c_short, 40) : color.new(color.black, 65)
+    color d_col = switch brk_dir
+        "LONG"  => color.new(i_c_long,  40)
+        "SHORT" => color.new(i_c_short, 40)
+        =>         color.new(color.black, 65)
     table.cell(dash, 0, 2, "Direction",text_color=color.new(color.white, 30), bgcolor=color.new(color.black, 70), text_size=size.small)
     table.cell(dash, 1, 2, na(brk_dir) ? "—" : brk_dir, text_color=color.white, bgcolor=d_col, text_size=size.small)
 

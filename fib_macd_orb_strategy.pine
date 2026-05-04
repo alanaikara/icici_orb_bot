@@ -8,7 +8,6 @@
 //   1. Apply to NSE 1-min chart (required — OR logic is time-based from 9:15 IST)
 //   2. Add a MACD indicator in a separate pane (12, 26, 9) to visualise MACD state
 //   3. Adjust inputs to match your backtest params — defaults are the best-performing combo
-//   4. Enable "Fib Levels", "OR Box", "Dashboard" for full visual overlay
 //
 // STRATEGY LOGIC (mirrors fib_macd_engine.py exactly):
 //   Step 1  Build Opening Range during first N minutes (9:15–9:45 for 30-min OR)
@@ -20,6 +19,11 @@
 //   Step 6  Stop-loss: just below 78.6% fib level (+ SL buffer)
 //   Step 7  Target: entry ± risk × target_R
 //   Step 8  Force-close at exit time (default 15:14)
+//
+// VISUAL STABILITY NOTE:
+//   All drawing (lines, labels, boxes) happens exclusively in barstate.islast.
+//   The state machine only updates data variables — no objects are created mid-bar.
+//   This prevents any flickering or repositioning when scrolling or zooming the chart.
 
 //@version=6
 strategy(
@@ -51,93 +55,77 @@ string G_RISK = "Risk Management"
 string G_TIME = "Session & Exit Time"
 string G_VIS  = "Visuals"
 
-// ── Opening Range ─────────────────────────────────────────────────────────────
 i_or_min        = input.int   (30,    "OR Duration (min)",    options=[15, 30],                   group=G_ORB,
-                                tooltip="15-min OR is faster but noisier. 30-min is the best per backtest.")
+                                tooltip="15-min OR is faster but noisier. 30-min is best per backtest.")
 i_max_wait      = input.int   (60,    "Max Wait Bars (swing)", minval=10, maxval=200,              group=G_ORB,
-                                tooltip="Max 1-min bars to wait for swing after breakout. Void setup if exceeded.")
+                                tooltip="Max 1-min bars after breakout to wait for swing confirmation.")
 
-// ── Fibonacci ─────────────────────────────────────────────────────────────────
 i_fib_entry     = input.float (0.618, "Fib Entry Level",      options=[0.382, 0.5, 0.618],        group=G_FIB,
                                 tooltip="Retracement level to enter at. 61.8% is best per backtest.")
 i_swing_confirm = input.float (0.3,   "Swing Confirm %",      minval=0.1, maxval=1.5, step=0.1,   group=G_FIB,
                                 tooltip="% retrace from peak/trough to lock in swing high/low.") / 100
 i_sl_buffer     = input.float (0.1,   "SL Buffer %",          minval=0.0, maxval=0.5, step=0.05,  group=G_FIB,
                                 tooltip="Extra margin below 78.6% fib for stop-loss.") / 100
-i_brk_type      = input.string("Immediate", "Breakout Type",  options=["Immediate", "Candle Close"], group=G_FIB,
-                                tooltip="Immediate = high/low touches OR boundary. Candle Close = close beyond it.")
+i_brk_type      = input.string("Immediate", "Breakout Type",  options=["Immediate", "Candle Close"], group=G_FIB)
 i_direction     = input.string("Both", "Trade Direction",      options=["Long Only", "Short Only", "Both"], group=G_FIB)
 
-// ── MACD ──────────────────────────────────────────────────────────────────────
 i_macd_cond     = input.string("Histogram Rising", "MACD Condition",
                                 options=["Histogram Positive", "Histogram Rising", "MACD Cross", "None"],
                                 group=G_MACD,
                                 tooltip="Filter applied to 5-min MACD at entry bar. 'Histogram Rising' is best per backtest.")
-i_macd_fast     = input.int   (12,    "Fast Length",          group=G_MACD)
-i_macd_slow     = input.int   (26,    "Slow Length",          group=G_MACD)
-i_macd_sig      = input.int   (9,     "Signal Length",        group=G_MACD)
+i_macd_fast     = input.int   (12, "Fast Length",  group=G_MACD)
+i_macd_slow     = input.int   (26, "Slow Length",  group=G_MACD)
+i_macd_sig      = input.int   (9,  "Signal Length",group=G_MACD)
 
-// ── Risk ──────────────────────────────────────────────────────────────────────
 i_target_r      = input.float (1.5,   "Target (R multiple)",  options=[1.5, 2.0, 2.5, 3.0],      group=G_RISK,
                                 tooltip="Profit target as a multiple of risk. 1.5R is best per backtest.")
 i_risk_inr      = input.float (1000,  "Max Risk per Trade ₹", minval=100, maxval=50000,            group=G_RISK,
-                                tooltip="Max ₹ at risk per trade. Quantity = risk / (entry - SL).")
+                                tooltip="Qty = floor(risk / (entry − SL)). Capped by available capital.")
 
-// ── Time ──────────────────────────────────────────────────────────────────────
-i_exit_h        = input.int   (15,    "Force Exit Hour",      minval=9, maxval=15,                 group=G_TIME)
-i_exit_m        = input.int   (14,    "Force Exit Minute",    minval=0, maxval=59,                 group=G_TIME)
-i_tz            = input.string("Asia/Kolkata", "Chart Timezone",                                   group=G_TIME,
-                                tooltip="Set to Asia/Kolkata for NSE. Change if chart timezone differs.")
+i_exit_h        = input.int   (15,  "Force Exit Hour",   minval=9, maxval=15, group=G_TIME)
+i_exit_m        = input.int   (14,  "Force Exit Minute", minval=0, maxval=59, group=G_TIME)
+i_tz            = input.string("Asia/Kolkata", "Chart Timezone", group=G_TIME,
+                                tooltip="Set to Asia/Kolkata for NSE.")
 
-// ── Visuals ───────────────────────────────────────────────────────────────────
-i_show_or       = input.bool  (true,  "Show OR Box",                 group=G_VIS, inline="v1")
-i_show_fib      = input.bool  (true,  "Show Fib Levels",             group=G_VIS, inline="v1")
-i_show_swing    = input.bool  (true,  "Show Swing Label",            group=G_VIS, inline="v1")
-i_show_dash     = input.bool  (true,  "Show Dashboard",              group=G_VIS, inline="v1")
-i_show_macd_bg  = input.bool  (true,  "MACD Background",             group=G_VIS, inline="v2",
-                                tooltip="Tints background when MACD is aligned with trade direction.")
-i_show_trade_bg = input.bool  (true,  "Trade Zone Background",       group=G_VIS, inline="v2")
-i_c_long        = input.color (color.new(#00c176, 0),   "Long",      group=G_VIS, inline="cols")
-i_c_short       = input.color (color.new(#f7525f, 0),   "Short",     group=G_VIS, inline="cols")
-i_c_fib         = input.color (color.new(#f7931a, 0),   "Fib Level", group=G_VIS, inline="cols")
-i_c_sl          = input.color (color.new(#f7525f, 0),   "SL",        group=G_VIS, inline="cols")
-i_c_tp          = input.color (color.new(#00bcd4, 0),   "TP",        group=G_VIS, inline="cols")
-i_c_or          = input.color (color.new(#2962ff, 85),  "OR Box",    group=G_VIS, inline="cols")
+i_show_or       = input.bool  (true,  "Show OR Box",       group=G_VIS, inline="v1")
+i_show_fib      = input.bool  (true,  "Show Fib Levels",   group=G_VIS, inline="v1")
+i_show_swing    = input.bool  (true,  "Show Swing Label",  group=G_VIS, inline="v1")
+i_show_dash     = input.bool  (true,  "Show Dashboard",    group=G_VIS, inline="v1")
+i_show_macd_bg  = input.bool  (true,  "MACD Background",   group=G_VIS, inline="v2")
+i_show_trade_bg = input.bool  (true,  "Trade Background",  group=G_VIS, inline="v2")
+i_c_long        = input.color (color.new(#00c176, 0),  "Long",      group=G_VIS, inline="cols")
+i_c_short       = input.color (color.new(#f7525f, 0),  "Short",     group=G_VIS, inline="cols")
+i_c_fib         = input.color (color.new(#f7931a, 0),  "Fib Level", group=G_VIS, inline="cols")
+i_c_sl          = input.color (color.new(#f7525f, 0),  "SL",        group=G_VIS, inline="cols")
+i_c_tp          = input.color (color.new(#00bcd4, 0),  "TP",        group=G_VIS, inline="cols")
+i_c_or          = input.color (color.new(#2962ff, 85), "OR Box",    group=G_VIS, inline="cols")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TIME HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-t_h             = hour  (time, i_tz)
-t_m             = minute(time, i_tz)
-t_mins          = t_h * 60 + t_m
+t_mins        = hour(time, i_tz) * 60 + minute(time, i_tz)
 
-SESSION_START   = 9 * 60 + 15                    // 9:15 IST
-OR_END          = SESSION_START + i_or_min        // 9:45 (30-min) or 9:30 (15-min)
-EXIT_MINS       = i_exit_h * 60 + i_exit_m        // 15:14 default
+SESSION_START = 9 * 60 + 15
+OR_END        = SESSION_START + i_or_min
+EXIT_MINS     = i_exit_h * 60 + i_exit_m
 
-in_or_window    = t_mins >= SESSION_START and t_mins < OR_END and t_mins < EXIT_MINS
-after_or        = t_mins >= OR_END        and t_mins < EXIT_MINS
-is_exit_bar     = t_mins >= EXIT_MINS
-is_session_bar  = t_mins >= SESSION_START and t_mins <= 15 * 60 + 30
-
-// New trading session — fires on first bar of each market day
-is_new_session  = session.isfirstbar and is_session_bar
+in_or_window  = t_mins >= SESSION_START and t_mins < OR_END  and t_mins < EXIT_MINS
+after_or      = t_mins >= OR_END         and t_mins < EXIT_MINS
+is_exit_bar   = t_mins >= EXIT_MINS
+is_session_bar= t_mins >= SESSION_START  and t_mins <= 15 * 60 + 30
+is_new_session= session.isfirstbar and is_session_bar
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MACD — 5-min timeframe
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// v6 requires a named function wrapper when request.security() returns a tuple
+// Named wrapper required in v6 for tuple-returning request.security()
 _macd_vals() => ta.macd(close, i_macd_fast, i_macd_slow, i_macd_sig)
 
 [m_macd, m_sig, m_hist] = request.security(
-    syminfo.tickerid, "5",
-    _macd_vals(),
-    lookahead = barmerge.lookahead_off
-)
+    syminfo.tickerid, "5", _macd_vals(), lookahead=barmerge.lookahead_off)
 
-// MACD confirmation checks
 macd_long  = switch i_macd_cond
     "Histogram Positive" => m_hist > 0
     "Histogram Rising"   => m_hist > m_hist[1]
@@ -151,52 +139,50 @@ macd_short = switch i_macd_cond
     => true
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// STATE MACHINE — persistent variables
+// STATE MACHINE — data variables only, no drawing here
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// States: IDLE → BUILD_OR → WAIT_BREAKOUT → TRACK_SWING → WAIT_ENTRY → IN_TRADE → DONE
 var string state          = "IDLE"
 
 // Opening Range
 var float  or_h           = na
 var float  or_l           = na
 var int    or_start_bar   = na
+var int    or_end_bar     = na    // bar index of last OR candle
 
 // Breakout
-var string brk_dir        = na          // "LONG" | "SHORT"
-var int    brk_bar        = na
+var string brk_dir        = na
 var int    bars_in_swing  = 0
+var float  running_extr   = na
 
 // Swing
-var float  running_extr   = na          // running peak (long) or trough (short)
 var float  swing_val      = na
 var int    swing_conf_bar = na
 
-// Fibonacci levels (computed after swing confirmed)
-var float  f0             = na          // anchor bottom (OR low for long)
-var float  f100           = na          // anchor top (swing high for long)
+// Fibonacci levels
+var float  f0             = na
+var float  f100           = na
 var float  f382           = na
 var float  f500           = na
 var float  f618           = na
 var float  f786           = na
-var float  f_entry        = na          // chosen entry level
-var float  f_sl           = na          // SL level (below 78.6%)
+var float  f_entry        = na
+var float  f_sl           = na
 
-// Entry
-var bool   touched        = false       // wick has touched fib level
+// Entry / exit
+var bool   touched        = false
 var float  entry_px       = na
 var float  sl_px          = na
 var float  tp_px          = na
 var int    entry_bar      = na
-var bool   entry_fired    = false       // one-bar pulse for signal plots
+var bool   entry_fired    = false
 
 // Dashboard counters
 var int    d_total        = 0
 var int    d_wins         = 0
-var int    d_losses       = 0
 var float  d_pnl          = 0.0
 
-// ── Visual object handles ─────────────────────────────────────────────────────
+// Visual object handles — updated only in barstate.islast
 var box    or_box         = na
 var line   ln_or_h        = na
 var line   ln_or_l        = na
@@ -216,37 +202,25 @@ var label  lb_fentry      = na
 var label  lb_f786        = na
 var label  lb_f0          = na
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-_delete_visuals() =>
-    box.delete(or_box),    line.delete(ln_or_h),   line.delete(ln_or_l)
-    line.delete(ln_f100),  line.delete(ln_f382),   line.delete(ln_f500)
-    line.delete(ln_f618),  line.delete(ln_f786),   line.delete(ln_f0)
-    line.delete(ln_entry_fib)
-    line.delete(ln_sl),    line.delete(ln_tp)
-    label.delete(lb_entry), label.delete(lb_swing)
-    label.delete(lb_f100),  label.delete(lb_fentry)
-    label.delete(lb_f786),  label.delete(lb_f0)
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// STATE MACHINE — per-bar logic (confirmed closes only)
+// PER-BAR STATE MACHINE  (data only — zero drawing calls)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 if barstate.isconfirmed
 
-    // ── Reset on new session ─────────────────────────────────────────────────
+    // ── New session: reset all data ──────────────────────────────────────────
     if is_new_session
         strategy.close_all("New Session")
-        _delete_visuals()
         state         := "BUILD_OR"
         or_h          := high
         or_l          := low
         or_start_bar  := bar_index
+        or_end_bar    := na
         brk_dir       := na
-        brk_bar       := na
         bars_in_swing := 0
         running_extr  := na
         swing_val     := na
-        swing_conf_bar := na
+        swing_conf_bar:= na
         f0            := na
         f100          := na
         f382          := na
@@ -267,45 +241,24 @@ if barstate.isconfirmed
         if in_or_window
             or_h := math.max(or_h, high)
             or_l := math.min(or_l, low)
-            // Live OR box
-            if i_show_or
-                box.delete(or_box)
-                or_box := box.new(or_start_bar, or_h, bar_index + 1, or_l,
-                                  bgcolor=i_c_or, border_color=color.new(#2962ff, 40),
-                                  border_width=1)
         else if after_or
-            state := "WAIT_BREAKOUT"
-            // Seal the OR box exactly at the OR end bar — no extension
-            if i_show_or
-                box.delete(or_box)
-                or_box := box.new(or_start_bar, or_h, bar_index - 1, or_l,
-                                  bgcolor=i_c_or, border_color=color.new(#2962ff, 40),
-                                  border_width=1)
-                // Dashed OR level lines extend rightward as breakout reference
-                line.delete(ln_or_h)
-                line.delete(ln_or_l)
-                ln_or_h := line.new(bar_index - 1, or_h, bar_index, or_h,
-                                    color=color.new(#2962ff, 50), width=1, style=line.style_dashed, extend=extend.right)
-                ln_or_l := line.new(bar_index - 1, or_l, bar_index, or_l,
-                                    color=color.new(#2962ff, 50), width=1, style=line.style_dashed, extend=extend.right)
+            or_end_bar := bar_index - 1
+            state      := "WAIT_BREAKOUT"
 
     // ── WAIT_BREAKOUT ────────────────────────────────────────────────────────
     if state == "WAIT_BREAKOUT" and not is_exit_bar
         bool allow_l = i_direction != "Short Only"
         bool allow_s = i_direction != "Long Only"
-
-        bool brk_l = i_brk_type == "Candle Close" ? close > or_h : high > or_h
-        bool brk_s = i_brk_type == "Candle Close" ? close < or_l : low  < or_l
+        bool brk_l   = i_brk_type == "Candle Close" ? close > or_h : high > or_h
+        bool brk_s   = i_brk_type == "Candle Close" ? close < or_l : low  < or_l
 
         if allow_l and brk_l
             brk_dir       := "LONG"
-            brk_bar       := bar_index
             running_extr  := high
             bars_in_swing := 0
             state         := "TRACK_SWING"
         else if allow_s and brk_s
             brk_dir       := "SHORT"
-            brk_bar       := bar_index
             running_extr  := low
             bars_in_swing := 0
             state         := "TRACK_SWING"
@@ -314,57 +267,28 @@ if barstate.isconfirmed
     if state == "TRACK_SWING" and not is_exit_bar
         bars_in_swing += 1
 
-        // Timeout — void setup
         if bars_in_swing > i_max_wait
             state := "DONE"
 
         else if brk_dir == "LONG"
             if high > running_extr
                 running_extr := high
-            // Swing confirmed: close drops i_swing_confirm% below peak
             if close < running_extr * (1 - i_swing_confirm)
                 swing_val      := running_extr
                 swing_conf_bar := bar_index
-                // Fib: anchor bottom = OR low, anchor top = swing high
                 float rng = swing_val - or_l
                 if rng > 0
-                    f0     := or_l
-                    f100   := swing_val
-                    f382   := swing_val - 0.382 * rng
-                    f500   := swing_val - 0.500 * rng
-                    f618   := swing_val - 0.618 * rng
-                    f786   := swing_val - 0.786 * rng
+                    f0      := or_l
+                    f100    := swing_val
+                    f382    := swing_val - 0.382 * rng
+                    f500    := swing_val - 0.500 * rng
+                    f618    := swing_val - 0.618 * rng
+                    f786    := swing_val - 0.786 * rng
                     f_entry := i_fib_entry == 0.382 ? f382 : i_fib_entry == 0.5 ? f500 : f618
-                    f_sl   := f786 * (1 - i_sl_buffer)
-                    state  := "WAIT_ENTRY"
-                    // Draw fib levels
-                    if i_show_fib
-                        line.delete(ln_f100),  line.delete(ln_f382)
-                        line.delete(ln_f500),  line.delete(ln_f618)
-                        line.delete(ln_f786),  line.delete(ln_f0)
-                        line.delete(ln_entry_fib)
-                        label.delete(lb_swing), label.delete(lb_f100)
-                        label.delete(lb_fentry), label.delete(lb_f786)
-                        label.delete(lb_f0)
-                        int x1 = swing_conf_bar
-                        ln_f100      := line.new(x1, f100,    x1 + 1, f100,    color=color.new(i_c_long, 55), width=1, style=line.style_dotted,  extend=extend.right)
-                        ln_f382      := line.new(x1, f382,    x1 + 1, f382,    color=color.new(i_c_fib,  70), width=1, style=line.style_dotted,  extend=extend.right)
-                        ln_f500      := line.new(x1, f500,    x1 + 1, f500,    color=color.new(i_c_fib,  70), width=1, style=line.style_dotted,  extend=extend.right)
-                        ln_f618      := line.new(x1, f618,    x1 + 1, f618,    color=color.new(i_c_fib,  70), width=1, style=line.style_dotted,  extend=extend.right)
-                        ln_f786      := line.new(x1, f786,    x1 + 1, f786,    color=color.new(i_c_sl,   50), width=1, style=line.style_dashed,  extend=extend.right)
-                        ln_f0        := line.new(x1, f0,      x1 + 1, f0,      color=color.new(i_c_long, 55), width=1, style=line.style_dotted,  extend=extend.right)
-                        ln_entry_fib := line.new(x1, f_entry, x1 + 1, f_entry, color=i_c_fib,                width=2, style=line.style_solid,   extend=extend.right)
-                        // Labels
-                        lb_swing  := label.new(bar_index, swing_val,
-                                               "Swing High\n" + str.tostring(swing_val, format.mintick),
-                                               color=color.new(i_c_long, 60), textcolor=color.white,
-                                               style=label.style_label_down, size=size.small)
-                        lb_f100   := label.new(x1, f100,   " 100%  " + str.tostring(f100,    format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_long, 40), style=label.style_label_right, size=size.tiny)
-                        lb_fentry := label.new(x1, f_entry," ↑ Entry " + str.tostring(i_fib_entry * 100, "#.#") + "%  " + str.tostring(f_entry, format.mintick), color=color.new(color.white, 100), textcolor=i_c_fib, style=label.style_label_right, size=size.small)
-                        lb_f786   := label.new(x1, f786,   " SL 78.6%  " + str.tostring(f786, format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_sl, 50), style=label.style_label_right, size=size.tiny)
-                        lb_f0     := label.new(x1, f0,     " 0%  " + str.tostring(f0,     format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_long, 40), style=label.style_label_right, size=size.tiny)
+                    f_sl    := f786 * (1 - i_sl_buffer)
+                    state   := "WAIT_ENTRY"
                 else
-                    state := "DONE"  // degenerate range
+                    state   := "DONE"
 
         else  // SHORT
             if low < running_extr
@@ -374,47 +298,22 @@ if barstate.isconfirmed
                 swing_conf_bar := bar_index
                 float rng = or_h - swing_val
                 if rng > 0
-                    f0     := or_h
-                    f100   := swing_val
-                    f382   := swing_val + 0.382 * rng
-                    f500   := swing_val + 0.500 * rng
-                    f618   := swing_val + 0.618 * rng
-                    f786   := swing_val + 0.786 * rng
+                    f0      := or_h
+                    f100    := swing_val
+                    f382    := swing_val + 0.382 * rng
+                    f500    := swing_val + 0.500 * rng
+                    f618    := swing_val + 0.618 * rng
+                    f786    := swing_val + 0.786 * rng
                     f_entry := i_fib_entry == 0.382 ? f382 : i_fib_entry == 0.5 ? f500 : f618
-                    f_sl   := f786 * (1 + i_sl_buffer)
-                    state  := "WAIT_ENTRY"
-                    if i_show_fib
-                        line.delete(ln_f100),  line.delete(ln_f382)
-                        line.delete(ln_f500),  line.delete(ln_f618)
-                        line.delete(ln_f786),  line.delete(ln_f0)
-                        line.delete(ln_entry_fib)
-                        label.delete(lb_swing), label.delete(lb_f100)
-                        label.delete(lb_fentry), label.delete(lb_f786)
-                        label.delete(lb_f0)
-                        int x1 = swing_conf_bar
-                        ln_f100      := line.new(x1, f100,    x1 + 1, f100,    color=color.new(i_c_short, 55), width=1, style=line.style_dotted,  extend=extend.right)
-                        ln_f382      := line.new(x1, f382,    x1 + 1, f382,    color=color.new(i_c_fib,   70), width=1, style=line.style_dotted,  extend=extend.right)
-                        ln_f500      := line.new(x1, f500,    x1 + 1, f500,    color=color.new(i_c_fib,   70), width=1, style=line.style_dotted,  extend=extend.right)
-                        ln_f618      := line.new(x1, f618,    x1 + 1, f618,    color=color.new(i_c_fib,   70), width=1, style=line.style_dotted,  extend=extend.right)
-                        ln_f786      := line.new(x1, f786,    x1 + 1, f786,    color=color.new(i_c_sl,    50), width=1, style=line.style_dashed,  extend=extend.right)
-                        ln_f0        := line.new(x1, f0,      x1 + 1, f0,      color=color.new(i_c_short, 55), width=1, style=line.style_dotted,  extend=extend.right)
-                        ln_entry_fib := line.new(x1, f_entry, x1 + 1, f_entry, color=i_c_fib,                 width=2, style=line.style_solid,   extend=extend.right)
-                        lb_swing  := label.new(bar_index, swing_val,
-                                               "Swing Low\n" + str.tostring(swing_val, format.mintick),
-                                               color=color.new(i_c_short, 60), textcolor=color.white,
-                                               style=label.style_label_up, size=size.small)
-                        lb_f100   := label.new(x1, f100,   " 100%  " + str.tostring(f100,    format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_short, 40), style=label.style_label_right, size=size.tiny)
-                        lb_fentry := label.new(x1, f_entry," ↓ Entry " + str.tostring(i_fib_entry * 100, "#.#") + "%  " + str.tostring(f_entry, format.mintick), color=color.new(color.white, 100), textcolor=i_c_fib, style=label.style_label_right, size=size.small)
-                        lb_f786   := label.new(x1, f786,   " SL 78.6%  " + str.tostring(f786, format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_sl, 50), style=label.style_label_right, size=size.tiny)
-                        lb_f0     := label.new(x1, f0,     " 0%  " + str.tostring(f0,     format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_short, 40), style=label.style_label_right, size=size.tiny)
+                    f_sl    := f786 * (1 + i_sl_buffer)
+                    state   := "WAIT_ENTRY"
                 else
-                    state := "DONE"
+                    state   := "DONE"
 
     // ── WAIT_ENTRY ───────────────────────────────────────────────────────────
     entry_fired := false
     if state == "WAIT_ENTRY" and not is_exit_bar
         if brk_dir == "LONG"
-            // Invalidation: close below SL zone (blown through 78.6%)
             if close <= f_sl
                 state := "DONE"
             else
@@ -428,23 +327,9 @@ if barstate.isconfirmed
                     entry_bar   := bar_index
                     entry_fired := true
                     state       := "IN_TRADE"
-                    // Draw SL and TP lines
-                    line.delete(ln_sl), line.delete(ln_tp)
-                    label.delete(lb_entry)
-                    ln_sl    := line.new(bar_index, sl_px, bar_index + 1, sl_px,
-                                         color=i_c_sl, width=2, style=line.style_dashed, extend=extend.right)
-                    ln_tp    := line.new(bar_index, tp_px, bar_index + 1, tp_px,
-                                         color=i_c_tp, width=2, style=line.style_dashed, extend=extend.right)
-                    lb_entry := label.new(bar_index, low * 0.9995,
-                                          "BUY @ " + str.tostring(entry_px, format.mintick) +
-                                          "\nSL "  + str.tostring(sl_px,    format.mintick) +
-                                          "\nTP "  + str.tostring(tp_px,    format.mintick),
-                                          color=i_c_long, textcolor=color.white,
-                                          style=label.style_label_up, size=size.small)
-                    int qty = risk > 0 ? math.max(1, int(i_risk_inr / risk)) : 1
-                    strategy.entry("Long", strategy.long, qty=qty, comment="FibORB Long")
-                    strategy.exit("Long Exit", "Long", stop=sl_px, limit=tp_px, comment="Exit")
-
+                    int qty     = risk > 0 ? math.max(1, int(i_risk_inr / risk)) : 1
+                    strategy.entry("Long",  strategy.long,  qty=qty, comment="FibORB Long")
+                    strategy.exit ("Long Exit",  "Long",  stop=sl_px, limit=tp_px)
         else  // SHORT
             if close >= f_sl
                 state := "DONE"
@@ -459,168 +344,192 @@ if barstate.isconfirmed
                     entry_bar   := bar_index
                     entry_fired := true
                     state       := "IN_TRADE"
-                    line.delete(ln_sl), line.delete(ln_tp)
-                    label.delete(lb_entry)
-                    ln_sl    := line.new(bar_index, sl_px, bar_index + 1, sl_px,
-                                         color=i_c_sl, width=2, style=line.style_dashed, extend=extend.right)
-                    ln_tp    := line.new(bar_index, tp_px, bar_index + 1, tp_px,
-                                         color=i_c_tp, width=2, style=line.style_dashed, extend=extend.right)
-                    lb_entry := label.new(bar_index, high * 1.0005,
-                                          "SELL @ " + str.tostring(entry_px, format.mintick) +
-                                          "\nSL "   + str.tostring(sl_px,    format.mintick) +
-                                          "\nTP "   + str.tostring(tp_px,    format.mintick),
-                                          color=i_c_short, textcolor=color.white,
-                                          style=label.style_label_down, size=size.small)
-                    int qty = risk > 0 ? math.max(1, int(i_risk_inr / risk)) : 1
+                    int qty     = risk > 0 ? math.max(1, int(i_risk_inr / risk)) : 1
                     strategy.entry("Short", strategy.short, qty=qty, comment="FibORB Short")
-                    strategy.exit("Short Exit", "Short", stop=sl_px, limit=tp_px, comment="Exit")
+                    strategy.exit ("Short Exit", "Short", stop=sl_px, limit=tp_px)
 
-    // ── Force exit at exit time ──────────────────────────────────────────────
+    // ── Force exit ───────────────────────────────────────────────────────────
     if is_exit_bar and (state == "IN_TRADE" or state == "WAIT_ENTRY")
         strategy.close_all("Time Exit")
         state := "DONE"
 
-    // ── Update dashboard counters on trade close ─────────────────────────────
+    // ── Track closed trades ──────────────────────────────────────────────────
     if strategy.closedtrades > d_total
         d_total := strategy.closedtrades
         float last_pnl = strategy.closedtrades.profit(strategy.closedtrades - 1)
-        d_pnl  += last_pnl
+        d_pnl += last_pnl
         if last_pnl >= 0
-            d_wins   += 1
-        else
-            d_losses += 1
+            d_wins += 1
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// BACKGROUND HIGHLIGHTS
+// BACKGROUND HIGHLIGHTS  (per-bar, but these are native plots — always stable)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// OR period tint
 bgcolor(in_or_window ? color.new(#2962ff, 94) : na, title="OR Period")
 
-// MACD aligned background (when in WAIT_ENTRY, show if MACD is onside)
 macd_aligned_long  = state == "WAIT_ENTRY" and brk_dir == "LONG"  and macd_long
 macd_aligned_short = state == "WAIT_ENTRY" and brk_dir == "SHORT" and macd_short
 bgcolor(i_show_macd_bg and macd_aligned_long  ? color.new(i_c_long,  92) : na, title="MACD Long OK")
 bgcolor(i_show_macd_bg and macd_aligned_short ? color.new(i_c_short, 92) : na, title="MACD Short OK")
-
-// In-trade background
 bgcolor(i_show_trade_bg and state == "IN_TRADE" and brk_dir == "LONG"  ? color.new(i_c_long,  95) : na, title="In Long Trade")
 bgcolor(i_show_trade_bg and state == "IN_TRADE" and brk_dir == "SHORT" ? color.new(i_c_short, 95) : na, title="In Short Trade")
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SIGNAL PLOTS
+// SIGNAL SHAPES  (native plots — always stable)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 plotshape(entry_fired and brk_dir == "LONG",  "Buy Signal",
-          shape.triangleup,   location.belowbar, color=i_c_long,
-          size=size.normal, text="BUY", textcolor=color.white)
+          shape.triangleup,   location.belowbar, color=i_c_long,  size=size.normal, text="BUY",  textcolor=color.white)
 plotshape(entry_fired and brk_dir == "SHORT", "Sell Signal",
-          shape.triangledown, location.abovebar, color=i_c_short,
-          size=size.normal, text="SELL", textcolor=color.white)
+          shape.triangledown, location.abovebar, color=i_c_short, size=size.normal, text="SELL", textcolor=color.white)
 
-// OR levels as plots (visible in data window + Strategy Tester)
-plot(not na(or_h) and state != "BUILD_OR" ? or_h : na, "OR High",
-     color=color.new(#2962ff, 60), linewidth=1, display=display.data_window)
-plot(not na(or_l) and state != "BUILD_OR" ? or_l : na, "OR Low",
-     color=color.new(#2962ff, 60), linewidth=1, display=display.data_window)
-
-// Active fib levels in data window
-plot(not na(f_entry) and (state == "WAIT_ENTRY" or state == "IN_TRADE") ? f_entry : na,
-     "Fib Entry Level", color=i_c_fib, linewidth=2, display=display.data_window)
-plot(not na(f_sl) and (state == "WAIT_ENTRY" or state == "IN_TRADE") ? f_sl : na,
-     "Fib SL Level", color=i_c_sl, linewidth=1, display=display.data_window)
-plot(not na(tp_px) and state == "IN_TRADE" ? tp_px : na,
-     "Target", color=i_c_tp, linewidth=1, display=display.data_window)
+// Data window plots
+plot(not na(or_h) and state != "BUILD_OR" ? or_h : na, "OR High", color=color.new(#2962ff,60), display=display.data_window)
+plot(not na(or_l) and state != "BUILD_OR" ? or_l : na, "OR Low",  color=color.new(#2962ff,60), display=display.data_window)
+plot(not na(f_entry) and (state == "WAIT_ENTRY" or state == "IN_TRADE") ? f_entry : na, "Fib Entry", color=i_c_fib, display=display.data_window)
+plot(not na(sl_px)   and state == "IN_TRADE" ? sl_px : na, "SL",     color=i_c_sl, display=display.data_window)
+plot(not na(tp_px)   and state == "IN_TRADE" ? tp_px : na, "Target", color=i_c_tp, display=display.data_window)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DASHBOARD TABLE
+// DRAWING — barstate.islast ONLY
+// All line/label/box objects are created here so they are never recreated
+// mid-session. Chart interactions (scroll, zoom, resize) do NOT trigger
+// barstate.islast, so drawings remain completely stable.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-var table dash = table.new(
-    position.top_right, 2, 11,
-    bgcolor      = color.new(color.black, 75),
-    border_width = 1,
-    border_color = color.new(color.white, 70),
-    frame_width  = 2,
-    frame_color  = color.new(color.white, 50)
-)
+if barstate.islast
 
-if barstate.islast and i_show_dash
-    float wr    = d_total > 0 ? d_wins / d_total * 100 : 0.0
-    float avg_r = (d_total > 0 and not na(entry_px) and not na(sl_px)) ?
-                  strategy.netprofit / d_total / math.max(1, math.abs(nz(entry_px) - nz(sl_px))) : 0.0
+    // ── Wipe all previous objects ────────────────────────────────────────────
+    box.delete(or_box)
+    line.delete(ln_or_h),   line.delete(ln_or_l)
+    line.delete(ln_f100),   line.delete(ln_f382),  line.delete(ln_f500)
+    line.delete(ln_f618),   line.delete(ln_f786),  line.delete(ln_f0)
+    line.delete(ln_entry_fib)
+    line.delete(ln_sl),     line.delete(ln_tp)
+    label.delete(lb_entry), label.delete(lb_swing)
+    label.delete(lb_f100),  label.delete(lb_fentry)
+    label.delete(lb_f786),  label.delete(lb_f0)
 
-    // Header
-    table.merge_cells(dash, 0, 0, 1, 0)
-    table.cell(dash, 0, 0, "Fib-MACD ORB  [NSE]",
-               text_color=color.white, bgcolor=color.new(#2962ff, 50),
-               text_size=size.normal,  text_halign=text.align_center)
+    // ── OR box ───────────────────────────────────────────────────────────────
+    if i_show_or and not na(or_start_bar) and not na(or_h)
+        int box_right = not na(or_end_bar) ? or_end_bar : bar_index
+        or_box := box.new(or_start_bar, or_h, box_right, or_l,
+                          bgcolor=i_c_or, border_color=color.new(#2962ff, 40), border_width=1)
 
-    // State row
-    color s_col = switch state
-        "IN_TRADE" => color.new(i_c_long,       40)
-        "DONE"     => color.new(color.gray,      55)
-        "BUILD_OR" => color.new(color.blue,      55)
-        =>            color.new(color.black,     60)
-    table.cell(dash, 0, 1, "State",    text_color=color.new(color.white, 30), bgcolor=color.new(color.black, 70), text_size=size.small)
-    table.cell(dash, 1, 1, state,      text_color=color.white, bgcolor=s_col, text_size=size.small)
+    // ── OR level dashed lines (breakout reference) ───────────────────────────
+    if not na(or_end_bar) and not na(or_h)
+        ln_or_h := line.new(or_end_bar, or_h, bar_index, or_h,
+                            color=color.new(#2962ff, 50), width=1, style=line.style_dashed, extend=extend.right)
+        ln_or_l := line.new(or_end_bar, or_l, bar_index, or_l,
+                            color=color.new(#2962ff, 50), width=1, style=line.style_dashed, extend=extend.right)
 
-    // Direction
-    color d_col = switch brk_dir
-        "LONG"  => color.new(i_c_long,  40)
-        "SHORT" => color.new(i_c_short, 40)
-        =>         color.new(color.black, 65)
-    table.cell(dash, 0, 2, "Direction",text_color=color.new(color.white, 30), bgcolor=color.new(color.black, 70), text_size=size.small)
-    table.cell(dash, 1, 2, na(brk_dir) ? "—" : brk_dir, text_color=color.white, bgcolor=d_col, text_size=size.small)
+    // ── Fibonacci levels ─────────────────────────────────────────────────────
+    if i_show_fib and not na(swing_val) and not na(swing_conf_bar)
+        bool  is_long   = brk_dir == "LONG"
+        color anc_color = is_long ? i_c_long : i_c_short
+        int   x1        = swing_conf_bar
 
-    // Entry
-    table.cell(dash, 0, 3, "Entry",    text_color=color.new(color.white, 30), bgcolor=color.new(color.black, 70), text_size=size.small)
-    table.cell(dash, 1, 3, na(entry_px) ? "—" : str.tostring(entry_px, format.mintick),
-               text_color=color.white,  bgcolor=color.new(color.black, 60), text_size=size.small)
+        ln_f100      := line.new(x1, f100,    x1+1, f100,    color=color.new(anc_color, 55), width=1, style=line.style_dotted, extend=extend.right)
+        ln_f382      := line.new(x1, f382,    x1+1, f382,    color=color.new(i_c_fib,   70), width=1, style=line.style_dotted, extend=extend.right)
+        ln_f500      := line.new(x1, f500,    x1+1, f500,    color=color.new(i_c_fib,   70), width=1, style=line.style_dotted, extend=extend.right)
+        ln_f618      := line.new(x1, f618,    x1+1, f618,    color=color.new(i_c_fib,   70), width=1, style=line.style_dotted, extend=extend.right)
+        ln_f786      := line.new(x1, f786,    x1+1, f786,    color=color.new(i_c_sl,    50), width=1, style=line.style_dashed, extend=extend.right)
+        ln_f0        := line.new(x1, f0,      x1+1, f0,      color=color.new(anc_color, 55), width=1, style=line.style_dotted, extend=extend.right)
+        ln_entry_fib := line.new(x1, f_entry, x1+1, f_entry, color=i_c_fib,                 width=2, style=line.style_solid,  extend=extend.right)
 
-    // SL
-    table.cell(dash, 0, 4, "Stop Loss",text_color=color.new(color.white, 30), bgcolor=color.new(color.black, 70), text_size=size.small)
-    table.cell(dash, 1, 4, na(sl_px)   ? "—" : str.tostring(sl_px,    format.mintick),
-               text_color=i_c_sl,       bgcolor=color.new(color.black, 60), text_size=size.small)
+        if i_show_swing
+            lb_swing := label.new(swing_conf_bar, swing_val,
+                                  (is_long ? "Swing High\n" : "Swing Low\n") + str.tostring(swing_val, format.mintick),
+                                  color=color.new(anc_color, 60), textcolor=color.white,
+                                  style=is_long ? label.style_label_down : label.style_label_up, size=size.small)
 
-    // TP
-    table.cell(dash, 0, 5, "Target",   text_color=color.new(color.white, 30), bgcolor=color.new(color.black, 70), text_size=size.small)
-    table.cell(dash, 1, 5, na(tp_px)   ? "—" : str.tostring(tp_px,    format.mintick),
-               text_color=i_c_tp,       bgcolor=color.new(color.black, 60), text_size=size.small)
+        lb_f100   := label.new(x1, f100,    " 100%  "  + str.tostring(f100,    format.mintick), color=color.new(color.white,100), textcolor=color.new(anc_color,40), style=label.style_label_right, size=size.tiny)
+        lb_fentry := label.new(x1, f_entry, (is_long ? " ↑ Entry " : " ↓ Entry ") + str.tostring(i_fib_entry*100,"#.#") + "%  " + str.tostring(f_entry, format.mintick), color=color.new(color.white,100), textcolor=i_c_fib, style=label.style_label_right, size=size.small)
+        lb_f786   := label.new(x1, f786,    " SL 78.6%  " + str.tostring(f786,  format.mintick), color=color.new(color.white,100), textcolor=color.new(i_c_sl,50),    style=label.style_label_right, size=size.tiny)
+        lb_f0     := label.new(x1, f0,      " 0%  "    + str.tostring(f0,      format.mintick), color=color.new(color.white,100), textcolor=color.new(anc_color,40), style=label.style_label_right, size=size.tiny)
 
-    // MACD state
-    bool macd_on = brk_dir == "LONG" ? macd_long : macd_short
-    color macd_c = macd_on ? color.new(i_c_long, 40) : color.new(i_c_short, 50)
-    table.cell(dash, 0, 6, "MACD (5m)",text_color=color.new(color.white, 30), bgcolor=color.new(color.black, 70), text_size=size.small)
-    table.cell(dash, 1, 6, na(brk_dir) ? "—" : (macd_on ? "✓ Aligned" : "✗ Waiting"),
-               text_color=color.white,  bgcolor=na(brk_dir) ? color.new(color.black, 65) : macd_c, text_size=size.small)
+    // ── Entry label + SL/TP lines ─────────────────────────────────────────────
+    if not na(entry_px) and not na(entry_bar)
+        bool  is_long  = brk_dir == "LONG"
+        float risk     = math.abs(entry_px - sl_px)
+        float lbl_y    = is_long ? entry_px - risk * 0.3 : entry_px + risk * 0.3
 
-    // Separator
-    table.merge_cells(dash, 0, 7, 1, 7)
-    table.cell(dash, 0, 7, "── Backtest Stats ──",
-               text_color=color.new(color.white, 50), bgcolor=color.new(color.black, 75),
-               text_size=size.tiny, text_halign=text.align_center)
+        ln_sl    := line.new(entry_bar, sl_px, entry_bar+1, sl_px,
+                             color=i_c_sl, width=2, style=line.style_dashed, extend=extend.right)
+        ln_tp    := line.new(entry_bar, tp_px, entry_bar+1, tp_px,
+                             color=i_c_tp, width=2, style=line.style_dashed, extend=extend.right)
+        lb_entry := label.new(entry_bar, lbl_y,
+                              (is_long ? "BUY" : "SELL") + " @ " + str.tostring(entry_px, format.mintick) +
+                              "\nSL " + str.tostring(sl_px, format.mintick) +
+                              "\nTP " + str.tostring(tp_px, format.mintick),
+                              color=is_long ? i_c_long : i_c_short, textcolor=color.white,
+                              style=is_long ? label.style_label_up : label.style_label_down, size=size.small)
 
-    // Win rate
-    color wr_c = wr >= 50 ? color.new(i_c_long, 40) : color.new(i_c_short, 50)
-    table.cell(dash, 0, 8, "Win Rate", text_color=color.new(color.white, 30), bgcolor=color.new(color.black, 70), text_size=size.small)
-    table.cell(dash, 1, 8,
-               str.tostring(wr, "#.0") + "%  (" + str.tostring(d_wins) + "/" + str.tostring(d_total) + ")",
-               text_color=color.white, bgcolor=d_total > 0 ? wr_c : color.new(color.black, 65), text_size=size.small)
+    // ── Dashboard ────────────────────────────────────────────────────────────
+    if i_show_dash
+        var table dash = table.new(position.top_right, 2, 11,
+                                   bgcolor=color.new(color.black,75),
+                                   border_width=1, border_color=color.new(color.white,70),
+                                   frame_width=2,  frame_color=color.new(color.white,50))
 
-    // Net PnL
-    color pnl_c = d_pnl >= 0 ? color.new(i_c_long, 40) : color.new(i_c_short, 50)
-    table.cell(dash, 0, 9,  "Net P&L ₹",text_color=color.new(color.white, 30), bgcolor=color.new(color.black, 70), text_size=size.small)
-    table.cell(dash, 1, 9,  (d_pnl >= 0 ? "+" : "") + str.tostring(d_pnl, "#.0"),
-               text_color=color.white, bgcolor=d_total > 0 ? pnl_c : color.new(color.black, 65), text_size=size.small)
+        float wr = d_total > 0 ? d_wins / d_total * 100 : 0.0
 
-    // Params reminder
-    table.merge_cells(dash, 0, 10, 1, 10)
-    string par_str = "OR:" + str.tostring(i_or_min) + "m  Fib:" + str.tostring(i_fib_entry * 100, "#") +
-                     "%  " + str.tostring(i_target_r, "#.#") + "R  MACD:" + i_macd_cond
-    table.cell(dash, 0, 10, par_str,
-               text_color=color.new(color.white, 50), bgcolor=color.new(color.black, 75),
-               text_size=size.tiny, text_halign=text.align_center)
+        table.merge_cells(dash, 0,0, 1,0)
+        table.cell(dash,0,0, "Fib-MACD ORB  [NSE]",
+                   text_color=color.white, bgcolor=color.new(#2962ff,50),
+                   text_size=size.normal, text_halign=text.align_center)
+
+        color s_col = switch state
+            "IN_TRADE" => color.new(i_c_long,  40)
+            "DONE"     => color.new(color.gray, 55)
+            "BUILD_OR" => color.new(color.blue, 55)
+            =>            color.new(color.black,60)
+        table.cell(dash,0,1,"State",    text_color=color.new(color.white,30), bgcolor=color.new(color.black,70), text_size=size.small)
+        table.cell(dash,1,1, state,     text_color=color.white, bgcolor=s_col, text_size=size.small)
+
+        color d_col = switch brk_dir
+            "LONG"  => color.new(i_c_long,  40)
+            "SHORT" => color.new(i_c_short, 40)
+            =>         color.new(color.black,65)
+        table.cell(dash,0,2,"Direction",text_color=color.new(color.white,30), bgcolor=color.new(color.black,70), text_size=size.small)
+        table.cell(dash,1,2, na(brk_dir) ? "—" : brk_dir, text_color=color.white, bgcolor=d_col, text_size=size.small)
+
+        table.cell(dash,0,3,"Entry",    text_color=color.new(color.white,30), bgcolor=color.new(color.black,70), text_size=size.small)
+        table.cell(dash,1,3, na(entry_px) ? "—" : str.tostring(entry_px, format.mintick), text_color=color.white, bgcolor=color.new(color.black,60), text_size=size.small)
+
+        table.cell(dash,0,4,"Stop Loss",text_color=color.new(color.white,30), bgcolor=color.new(color.black,70), text_size=size.small)
+        table.cell(dash,1,4, na(sl_px) ? "—" : str.tostring(sl_px, format.mintick), text_color=i_c_sl, bgcolor=color.new(color.black,60), text_size=size.small)
+
+        table.cell(dash,0,5,"Target",   text_color=color.new(color.white,30), bgcolor=color.new(color.black,70), text_size=size.small)
+        table.cell(dash,1,5, na(tp_px) ? "—" : str.tostring(tp_px, format.mintick), text_color=i_c_tp, bgcolor=color.new(color.black,60), text_size=size.small)
+
+        bool  macd_on = brk_dir == "LONG" ? macd_long : macd_short
+        color macd_c  = macd_on ? color.new(i_c_long,40) : color.new(i_c_short,50)
+        table.cell(dash,0,6,"MACD (5m)",text_color=color.new(color.white,30), bgcolor=color.new(color.black,70), text_size=size.small)
+        table.cell(dash,1,6, na(brk_dir) ? "—" : (macd_on ? "✓ Aligned" : "✗ Waiting"),
+                   text_color=color.white, bgcolor=na(brk_dir) ? color.new(color.black,65) : macd_c, text_size=size.small)
+
+        table.merge_cells(dash,0,7,1,7)
+        table.cell(dash,0,7,"── Backtest Stats ──",
+                   text_color=color.new(color.white,50), bgcolor=color.new(color.black,75),
+                   text_size=size.tiny, text_halign=text.align_center)
+
+        color wr_c = wr >= 50 ? color.new(i_c_long,40) : color.new(i_c_short,50)
+        table.cell(dash,0,8,"Win Rate", text_color=color.new(color.white,30), bgcolor=color.new(color.black,70), text_size=size.small)
+        table.cell(dash,1,8, str.tostring(wr,"#.0") + "%  (" + str.tostring(d_wins) + "/" + str.tostring(d_total) + ")",
+                   text_color=color.white, bgcolor=d_total>0 ? wr_c : color.new(color.black,65), text_size=size.small)
+
+        color pnl_c = d_pnl >= 0 ? color.new(i_c_long,40) : color.new(i_c_short,50)
+        table.cell(dash,0,9,"Net P&L ₹",text_color=color.new(color.white,30), bgcolor=color.new(color.black,70), text_size=size.small)
+        table.cell(dash,1,9, (d_pnl>=0 ? "+" : "") + str.tostring(d_pnl,"#.0"),
+                   text_color=color.white, bgcolor=d_total>0 ? pnl_c : color.new(color.black,65), text_size=size.small)
+
+        table.merge_cells(dash,0,10,1,10)
+        table.cell(dash,0,10,
+                   "OR:" + str.tostring(i_or_min) + "m  Fib:" + str.tostring(i_fib_entry*100,"#") +
+                   "%  " + str.tostring(i_target_r,"#.#") + "R  MACD:" + i_macd_cond,
+                   text_color=color.new(color.white,50), bgcolor=color.new(color.black,75),
+                   text_size=size.tiny, text_halign=text.align_center)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ALERTS

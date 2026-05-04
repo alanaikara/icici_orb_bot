@@ -28,4 +28,4 @@ build/
 # IDE specific files
 .idea/
 .vscode/
-.DS_Store
+.DS_Store.claude/worktrees/

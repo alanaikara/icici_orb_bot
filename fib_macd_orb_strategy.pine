@@ -275,18 +275,18 @@ if barstate.isconfirmed
                                   border_width=1)
         else if after_or
             state := "WAIT_BREAKOUT"
-            // Finalize OR box with extended right edge
+            // Seal the OR box exactly at the OR end bar — no extension
             if i_show_or
                 box.delete(or_box)
-                or_box := box.new(or_start_bar, or_h, bar_index + 80, or_l,
+                or_box := box.new(or_start_bar, or_h, bar_index - 1, or_l,
                                   bgcolor=i_c_or, border_color=color.new(#2962ff, 40),
                                   border_width=1)
-                // Persistent OR level lines
+                // Dashed OR level lines extend rightward as breakout reference
                 line.delete(ln_or_h)
                 line.delete(ln_or_l)
-                ln_or_h := line.new(or_start_bar, or_h, bar_index + 200, or_h,
+                ln_or_h := line.new(bar_index - 1, or_h, bar_index + 300, or_h,
                                     color=color.new(#2962ff, 50), width=1, style=line.style_dashed)
-                ln_or_l := line.new(or_start_bar, or_l, bar_index + 200, or_l,
+                ln_or_l := line.new(bar_index - 1, or_l, bar_index + 300, or_l,
                                     color=color.new(#2962ff, 50), width=1, style=line.style_dashed)
 
     // ── WAIT_BREAKOUT ────────────────────────────────────────────────────────

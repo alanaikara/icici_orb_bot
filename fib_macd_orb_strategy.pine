@@ -21,7 +21,7 @@
 //   Step 7  Target: entry ± risk × target_R
 //   Step 8  Force-close at exit time (default 15:14)
 
-//@version=5
+//@version=6
 strategy(
   title                   = "Fib-MACD ORB Pullback [NSE]",
   shorttitle              = "FibORB",
@@ -128,9 +128,12 @@ is_new_session  = session.isfirstbar and is_session_bar
 // MACD — 5-min timeframe
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// v6 requires a named function wrapper when request.security() returns a tuple
+_macd_vals() => ta.macd(close, i_macd_fast, i_macd_slow, i_macd_sig)
+
 [m_macd, m_sig, m_hist] = request.security(
     syminfo.tickerid, "5",
-    ta.macd(close, i_macd_fast, i_macd_slow, i_macd_sig),
+    _macd_vals(),
     lookahead = barmerge.lookahead_off
 )
 
@@ -440,7 +443,7 @@ if barstate.isconfirmed
                                           "\nTP "  + str.tostring(tp_px,    format.mintick),
                                           color=i_c_long, textcolor=color.white,
                                           style=label.style_label_up, size=size.small)
-                    int qty = risk > 0 ? math.max(1, math.floor(i_risk_inr / risk)) : 1
+                    int qty = risk > 0 ? math.max(1, int(i_risk_inr / risk)) : 1
                     strategy.entry("Long", strategy.long, qty=qty, comment="FibORB Long")
                     strategy.exit("Long Exit", "Long", stop=sl_px, limit=tp_px, comment="Exit")
 
@@ -470,7 +473,7 @@ if barstate.isconfirmed
                                           "\nTP "   + str.tostring(tp_px,    format.mintick),
                                           color=i_c_short, textcolor=color.white,
                                           style=label.style_label_down, size=size.small)
-                    int qty = risk > 0 ? math.max(1, math.floor(i_risk_inr / risk)) : 1
+                    int qty = risk > 0 ? math.max(1, int(i_risk_inr / risk)) : 1
                     strategy.entry("Short", strategy.short, qty=qty, comment="FibORB Short")
                     strategy.exit("Short Exit", "Short", stop=sl_px, limit=tp_px, comment="Exit")
 

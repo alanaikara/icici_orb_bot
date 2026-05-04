@@ -360,10 +360,10 @@ if barstate.isconfirmed
                                                "Swing High\n" + str.tostring(swing_val, format.mintick),
                                                color=color.new(i_c_long, 60), textcolor=color.white,
                                                style=label.style_label_down, size=size.small)
-                        lb_f100   := label.new(x1, f100,   " 100%  " + str.tostring(f100,    format.mintick), color=color.transparent, textcolor=color.new(i_c_long, 40), style=label.style_label_right, size=size.tiny)
-                        lb_fentry := label.new(x1, f_entry," ↑ Entry " + str.tostring(i_fib_entry * 100, "#.#") + "%  " + str.tostring(f_entry, format.mintick), color=color.transparent, textcolor=i_c_fib, style=label.style_label_right, size=size.small)
-                        lb_f786   := label.new(x1, f786,   " SL 78.6%  " + str.tostring(f786, format.mintick), color=color.transparent, textcolor=color.new(i_c_sl, 50), style=label.style_label_right, size=size.tiny)
-                        lb_f0     := label.new(x1, f0,     " 0%  " + str.tostring(f0,     format.mintick), color=color.transparent, textcolor=color.new(i_c_long, 40), style=label.style_label_right, size=size.tiny)
+                        lb_f100   := label.new(x1, f100,   " 100%  " + str.tostring(f100,    format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_long, 40), style=label.style_label_right, size=size.tiny)
+                        lb_fentry := label.new(x1, f_entry," ↑ Entry " + str.tostring(i_fib_entry * 100, "#.#") + "%  " + str.tostring(f_entry, format.mintick), color=color.new(color.white, 100), textcolor=i_c_fib, style=label.style_label_right, size=size.small)
+                        lb_f786   := label.new(x1, f786,   " SL 78.6%  " + str.tostring(f786, format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_sl, 50), style=label.style_label_right, size=size.tiny)
+                        lb_f0     := label.new(x1, f0,     " 0%  " + str.tostring(f0,     format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_long, 40), style=label.style_label_right, size=size.tiny)
                 else
                     state := "DONE"  // degenerate range
 
@@ -405,10 +405,10 @@ if barstate.isconfirmed
                                                "Swing Low\n" + str.tostring(swing_val, format.mintick),
                                                color=color.new(i_c_short, 60), textcolor=color.white,
                                                style=label.style_label_up, size=size.small)
-                        lb_f100   := label.new(x1, f100,   " 100%  " + str.tostring(f100,    format.mintick), color=color.transparent, textcolor=color.new(i_c_short, 40), style=label.style_label_right, size=size.tiny)
-                        lb_fentry := label.new(x1, f_entry," ↓ Entry " + str.tostring(i_fib_entry * 100, "#.#") + "%  " + str.tostring(f_entry, format.mintick), color=color.transparent, textcolor=i_c_fib, style=label.style_label_right, size=size.small)
-                        lb_f786   := label.new(x1, f786,   " SL 78.6%  " + str.tostring(f786, format.mintick), color=color.transparent, textcolor=color.new(i_c_sl, 50), style=label.style_label_right, size=size.tiny)
-                        lb_f0     := label.new(x1, f0,     " 0%  " + str.tostring(f0,     format.mintick), color=color.transparent, textcolor=color.new(i_c_short, 40), style=label.style_label_right, size=size.tiny)
+                        lb_f100   := label.new(x1, f100,   " 100%  " + str.tostring(f100,    format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_short, 40), style=label.style_label_right, size=size.tiny)
+                        lb_fentry := label.new(x1, f_entry," ↓ Entry " + str.tostring(i_fib_entry * 100, "#.#") + "%  " + str.tostring(f_entry, format.mintick), color=color.new(color.white, 100), textcolor=i_c_fib, style=label.style_label_right, size=size.small)
+                        lb_f786   := label.new(x1, f786,   " SL 78.6%  " + str.tostring(f786, format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_sl, 50), style=label.style_label_right, size=size.tiny)
+                        lb_f0     := label.new(x1, f0,     " 0%  " + str.tostring(f0,     format.mintick), color=color.new(color.white, 100), textcolor=color.new(i_c_short, 40), style=label.style_label_right, size=size.tiny)
                 else
                     state := "DONE"
 

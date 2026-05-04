@@ -630,12 +630,12 @@ if barstate.islast and i_show_dash
 
 alertcondition(entry_fired and brk_dir == "LONG",
                "FibORB — Long Entry",
-               "Fib-MACD ORB: LONG entry at {{close}} | SL: " + str.tostring(sl_px, format.mintick) + " | TP: " + str.tostring(tp_px, format.mintick))
+               "Fib-MACD ORB: LONG entry at {{close}} on {{ticker}}")
 
 alertcondition(entry_fired and brk_dir == "SHORT",
                "FibORB — Short Entry",
-               "Fib-MACD ORB: SHORT entry at {{close}} | SL: " + str.tostring(sl_px, format.mintick) + " | TP: " + str.tostring(tp_px, format.mintick))
+               "Fib-MACD ORB: SHORT entry at {{close}} on {{ticker}}")
 
 alertcondition(state[1] == "IN_TRADE" and state == "DONE" and is_exit_bar,
                "FibORB — Time Exit",
-               "Fib-MACD ORB: Force-closed at {{close}} (time exit)")
+               "Fib-MACD ORB: Force-closed at {{close}} on {{ticker}} (time exit)")

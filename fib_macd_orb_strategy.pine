@@ -182,6 +182,13 @@ var int    d_total        = 0
 var int    d_wins         = 0
 var float  d_pnl          = 0.0
 
+// Multi-session OR history (arrays store each completed day's OR data)
+var int[]   ha_start = array.new_int()
+var int[]   ha_end   = array.new_int()
+var float[] ha_orh   = array.new_float()
+var float[] ha_orl   = array.new_float()
+var box[]   ha_boxes = array.new_box()
+
 // Visual object handles — updated only in barstate.islast
 var box    or_box         = na
 var line   ln_or_h        = na
@@ -244,6 +251,16 @@ if barstate.isconfirmed
         else if after_or
             or_end_bar := bar_index - 1
             state      := "WAIT_BREAKOUT"
+            // Save completed OR so barstate.islast can draw all historical boxes
+            array.push(ha_start, or_start_bar)
+            array.push(ha_end,   or_end_bar)
+            array.push(ha_orh,   or_h)
+            array.push(ha_orl,   or_l)
+            if array.size(ha_start) > 199
+                array.shift(ha_start)
+                array.shift(ha_end)
+                array.shift(ha_orh)
+                array.shift(ha_orl)
 
     // ── WAIT_BREAKOUT ────────────────────────────────────────────────────────
     if state == "WAIT_BREAKOUT" and not is_exit_bar
@@ -401,6 +418,9 @@ if barstate.islast
 
     // ── Wipe all previous objects ────────────────────────────────────────────
     box.delete(or_box)
+    for _b in ha_boxes
+        box.delete(_b)
+    array.clear(ha_boxes)
     line.delete(ln_or_h),   line.delete(ln_or_l)
     line.delete(ln_f100),   line.delete(ln_f382),  line.delete(ln_f500)
     line.delete(ln_f618),   line.delete(ln_f786),  line.delete(ln_f0)
@@ -410,11 +430,18 @@ if barstate.islast
     label.delete(lb_f100),  label.delete(lb_fentry)
     label.delete(lb_f786),  label.delete(lb_f0)
 
-    // ── OR box ───────────────────────────────────────────────────────────────
-    if i_show_or and not na(or_start_bar) and not na(or_h)
-        int box_right = not na(or_end_bar) ? or_end_bar : bar_index
-        or_box := box.new(or_start_bar, or_h, box_right, or_l,
-                          bgcolor=i_c_or, border_color=color.new(#2962ff, 40), border_width=1)
+    // ── OR boxes — all sessions ──────────────────────────────────────────────
+    if i_show_or
+        // Historical completed sessions
+        for _i = 0 to array.size(ha_start) - 1
+            array.push(ha_boxes, box.new(
+                  array.get(ha_start, _i), array.get(ha_orh, _i),
+                  array.get(ha_end,   _i), array.get(ha_orl, _i),
+                  bgcolor=i_c_or, border_color=color.new(#2962ff, 40), border_width=1))
+        // Current session's OR if still building (not yet in arrays)
+        if not na(or_start_bar) and not na(or_h) and na(or_end_bar)
+            or_box := box.new(or_start_bar, or_h, bar_index, or_l,
+                              bgcolor=i_c_or, border_color=color.new(#2962ff, 40), border_width=1)
 
     // ── OR level dashed lines (breakout reference) ───────────────────────────
     if not na(or_end_bar) and not na(or_h)

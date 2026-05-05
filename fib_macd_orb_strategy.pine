@@ -562,14 +562,11 @@ if barstate.islast
 // ALERTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-alertcondition(entry_fired and brk_dir == "LONG",
-               "FibORB — Long Entry",
-               "Fib-MACD ORB: LONG entry at {{close}} on {{ticker}}")
+if entry_fired and brk_dir == "LONG"
+    alert("Fib-MACD ORB: LONG entry at "  + str.tostring(close) + " on " + syminfo.ticker, alert.freq_once_per_bar_close)
 
-alertcondition(entry_fired and brk_dir == "SHORT",
-               "FibORB — Short Entry",
-               "Fib-MACD ORB: SHORT entry at {{close}} on {{ticker}}")
+if entry_fired and brk_dir == "SHORT"
+    alert("Fib-MACD ORB: SHORT entry at " + str.tostring(close) + " on " + syminfo.ticker, alert.freq_once_per_bar_close)
 
-alertcondition(state[1] == "IN_TRADE" and state == "DONE" and is_exit_bar,
-               "FibORB — Time Exit",
-               "Fib-MACD ORB: Force-closed at {{close}} on {{ticker}} (time exit)")
+if state[1] == "IN_TRADE" and state == "DONE" and is_exit_bar
+    alert("Fib-MACD ORB: Force-closed at " + str.tostring(close) + " on " + syminfo.ticker + " (time exit)", alert.freq_once_per_bar_close)

@@ -12,7 +12,7 @@ RISK_OVERRIDES: dict[str, float] = {}  # e.g. {"SBIN": 2_000}
 CAPITAL_PER_TRADE:    float = 3_00_000  # ₹ max capital per position
 MAX_TRADES_PER_DAY:   int   = 10
 MIS_LEVERAGE_DIVISOR: float = 0.20      # ≈5x intraday leverage
-SL_LIMIT_GAP_RS:      float = 1.00      # SL-limit pinned 1 rupee beyond trigger (NSE band is narrow)
+ENTRY_FILL_WAIT_S:    float = 30        # seconds to wait for LIMIT entry to fill before cancelling
 MIN_MACD_BARS:        int   = 2
 MACD_WARMUP_DAYS:     int   = 5         # prior trading days for MACD EMA continuity
 
@@ -115,8 +115,7 @@ _DAY    = "DAY"
 _MIS    = "MIS"      # Margin Intraday Square-off — confirmed in annexures
 _MARKET = "MARKET"
 _LIMIT  = "LIMIT"
-_SL     = "SL"       # Stop Loss — annexures confirm "SL" not "STOP_LOSS"
-_SL_M   = "SL_M"     # Stop Loss Market
+_SL_M   = "SL_M"     # Stop Loss Market (used in OCO stop_loss leg)
 _BUY    = "BUY"
 _SELL   = "SELL"
 _OCO    = "OCO"      # Smart-order type for One-Cancels-Other (SL+target)
@@ -155,8 +154,6 @@ class OpenTrade:
     stop_loss:       float
     target_price:    float
     entry_time:      str
-    sl_order_id:     str = ""    # legacy: separate SL leg (pre-OCO)
-    target_order_id: str = ""    # legacy: separate target leg (pre-OCO)
     entry_order_id:  str = ""
     oco_order_id:    str = ""    # Groww smart-order id covering SL+target as one OCO
 
@@ -575,14 +572,13 @@ class GrowwBroker:
             token   = GrowwAPI.get_access_token(api_key=self._api_key, secret=self._secret)
             self._g = GrowwAPI(token)
 
-            global _NSE, _CASH, _DAY, _MIS, _MARKET, _LIMIT, _SL, _SL_M, _BUY, _SELL, _OCO
+            global _NSE, _CASH, _DAY, _MIS, _MARKET, _LIMIT, _SL_M, _BUY, _SELL, _OCO
             _NSE    = getattr(self._g, "EXCHANGE_NSE",                    _NSE)
             _CASH   = getattr(self._g, "SEGMENT_CASH",                    _CASH)
             _DAY    = getattr(self._g, "VALIDITY_DAY",                    _DAY)
             _MIS    = getattr(self._g, "PRODUCT_MIS",                     _MIS)
             _MARKET = getattr(self._g, "ORDER_TYPE_MARKET",               _MARKET)
             _LIMIT  = getattr(self._g, "ORDER_TYPE_LIMIT",                _LIMIT)
-            _SL     = getattr(self._g, "ORDER_TYPE_STOP_LOSS",            _SL)
             _SL_M   = getattr(self._g, "ORDER_TYPE_STOP_LOSS_MARKET",     _SL_M)
             _BUY    = getattr(self._g, "TRANSACTION_TYPE_BUY",            _BUY)
             _SELL   = getattr(self._g, "TRANSACTION_TYPE_SELL",           _SELL)
@@ -592,7 +588,7 @@ class GrowwBroker:
             logger.info(
                 f"API constants → NSE={_NSE!r} CASH={_CASH!r} DAY={_DAY!r} "
                 f"MIS={_MIS!r} MARKET={_MARKET!r} LIMIT={_LIMIT!r} "
-                f"SL={_SL!r} SL_M={_SL_M!r} BUY={_BUY!r} SELL={_SELL!r} OCO={_OCO!r}"
+                f"SL_M={_SL_M!r} BUY={_BUY!r} SELL={_SELL!r} OCO={_OCO!r}"
             )
             return True
         except Exception as e:
@@ -785,52 +781,6 @@ class GrowwBroker:
             logger.error(f"place_market_order({symbol}): exception — {e}")
             return OrderResult(False, "", str(e))
 
-    def place_stoploss_order(self, symbol: str, action: str, qty: int,
-                             trigger: float, limit: float = 0.0,
-                             ref_id: Optional[str] = None) -> OrderResult:
-        """SL (stop-loss limit). Pin limit SL_LIMIT_GAP_RS (default 1 ₹) beyond trigger.
-        NSE's trigger-to-limit band is narrow; a 1% gap was being rejected on TECHM."""
-        txn = _BUY if action.lower() == "buy" else _SELL
-        ref = ref_id or _ref_id()
-        trigger_r = _round_tick(trigger)
-        # SELL SL (LONG exit): limit BELOW trigger.  BUY SL (SHORT exit): limit ABOVE trigger.
-        if limit and limit > 0:
-            limit_r = _round_tick(limit)
-        elif txn == _SELL:
-            limit_r = _round_tick(trigger_r - SL_LIMIT_GAP_RS)
-        else:
-            limit_r = _round_tick(trigger_r + SL_LIMIT_GAP_RS)
-        logger.info(
-            f"place_stoploss_order → symbol={symbol} txn={txn} qty={qty} "
-            f"trigger={trigger_r:.2f} limit={limit_r:.2f} "
-            f"order_type={_SL} product={_MIS} ref={ref}"
-        )
-        try:
-            resp = self._g.place_order(
-                trading_symbol     = symbol,
-                quantity           = qty,
-                validity           = _DAY,
-                exchange           = _NSE,
-                segment            = _CASH,
-                product            = _MIS,
-                order_type         = _SL,       # stop-loss limit: NSE-compliant
-                transaction_type   = txn,
-                price              = limit_r,
-                trigger_price      = trigger_r,
-                order_reference_id = ref,
-            )
-            logger.debug(f"place_stoploss_order({symbol}) raw response: {resp}")
-            oid = _attr(resp, "groww_order_id") or ""
-            if oid:
-                logger.info(f"place_stoploss_order({symbol}): order accepted — groww_order_id={oid}")
-                return OrderResult(True, oid, _attr(resp, "order_status") or "")
-            msg = _attr(resp, "remark") or str(resp)
-            logger.error(f"place_stoploss_order({symbol}): REJECTED — {msg}")
-            return OrderResult(False, "", msg)
-        except Exception as e:
-            logger.error(f"place_stoploss_order({symbol}): exception — {e}")
-            return OrderResult(False, "", str(e))
-
     def place_limit_order(self, symbol: str, action: str, qty: int,
                           price: float,
                           ref_id: Optional[str] = None) -> OrderResult:
@@ -994,33 +944,6 @@ class GrowwBroker:
         except Exception as e:
             logger.error(f"get_all_mis_positions: {e}")
             return []
-
-    def get_order_status(self, order_id: str) -> str:
-        """Returns the raw order_status string from Groww (e.g. 'COMPLETE', 'OPEN', 'CANCELLED')."""
-        try:
-            resp = self._g.get_order_status(
-                groww_order_id = order_id,
-                segment        = _CASH,
-            )
-            return str(_attr(resp, "order_status") or "UNKNOWN").upper()
-        except Exception as e:
-            logger.error(f"get_order_status({order_id}): {e}")
-            return "UNKNOWN"
-
-    def get_order_fill_info(self, order_id: str) -> tuple[str, int, float]:
-        """Return (order_status, filled_quantity, average_fill_price) for an order.
-        Field names verified against Groww docs:
-          https://groww.in/trade-api/docs/curl/orders → GET /order/status/{id}
-        Used after market entry to anchor SL/target to the real fill, not the planned level."""
-        try:
-            resp = self._g.get_order_status(groww_order_id=order_id, segment=_CASH)
-            status     = str(_attr(resp, "order_status") or "UNKNOWN").upper()
-            filled_qty = int(_attr(resp, "filled_quantity") or 0)
-            avg_price  = float(_attr(resp, "average_fill_price") or 0)
-            return status, filled_qty, avg_price
-        except Exception as e:
-            logger.error(f"get_order_fill_info({order_id}): {e}")
-            return "UNKNOWN", 0, 0.0
 
     def cancel_order(self, order_id: str) -> bool:
         logger.info(f"cancel_order: attempting to cancel order_id={order_id}")
@@ -1463,9 +1386,22 @@ class LiveTrader:
             state.trade = None
             return
 
-        # ── Place market entry order (stable ref → idempotent retry-safe) ─────
-        entry_ref = f"E{symbol[:6]}{uuid.uuid4().hex[:6].upper()}"
-        result    = self.broker.place_market_order(symbol, buy_sell, qty, ref_id=entry_ref)
+        # ── Snapshot pre-entry position so we can attribute the fill via delta ──
+        # Position is the truth source: order-status polling doesn't reliably
+        # return fill quantity on Groww. We compare pre vs post position.
+        pre_qty = self.broker.get_live_qty(symbol)
+        if pre_qty is None:
+            logger.warning(f"{symbol} could not read pre-entry position — assuming 0")
+            pre_qty = 0
+
+        # ── Place LIMIT entry order at fib_entry ──────────────────────────────
+        # LIMIT (not market) so the actual fill is guaranteed to be AT the
+        # planned fib level or BETTER. Stable ref → idempotent retry-safe.
+        limit_price = trade.entry_price        # planned fib_entry, already tick-rounded
+        entry_ref   = f"E{symbol[:6]}{uuid.uuid4().hex[:6].upper()}"
+        result      = self.broker.place_limit_order(
+            symbol, buy_sell, qty, price=limit_price, ref_id=entry_ref,
+        )
         if not result.success:
             logger.error(f"{symbol} entry FAILED: {result.message}")
             state.state = State.DONE
@@ -1474,84 +1410,35 @@ class LiveTrader:
         trade.entry_order_id = result.order_id
         self._trades_today  += 1
         self._save_state()                      # checkpoint: entry placed
-        logger.info(f"{symbol} entry placed: {result.order_id} (ref={entry_ref})")
+        logger.info(
+            f"{symbol} LIMIT entry placed @ {limit_price:.2f}: "
+            f"{result.order_id} (ref={entry_ref}, pre_qty={pre_qty})"
+        )
 
-        # ── Verify entry actually filled before placing SL ────────────────────
-        # Poll order status briefly (up to ~3s). Market orders typically fill
-        # instantly, but a REJECTED state means we MUST NOT place an SL —
-        # otherwise the SL fires later as a naked position.
-        filled_qty, avg_fill_px = self._wait_for_fill(result.order_id, expected=qty, max_wait_s=3)
+        # ── Wait for fill via POSITION delta (not order status) ───────────────
+        filled_qty = self._wait_for_position_fill(
+            symbol, direction, expected_qty=qty,
+            pre_qty=pre_qty, order_id=result.order_id,
+            max_wait_s=ENTRY_FILL_WAIT_S,
+        )
         if filled_qty == 0:
-            logger.error(
-                f"{symbol} entry NOT filled (status check) — "
-                f"abandoning trade, NOT placing SL"
+            logger.warning(
+                f"{symbol} LIMIT entry did not fill @ {limit_price:.2f} within "
+                f"{ENTRY_FILL_WAIT_S}s — abandoning trade for today"
             )
             state.state = State.DONE
             state.trade = None
+            self._save_state()
             return
         if filled_qty < qty:
             logger.warning(
-                f"{symbol} partial fill: {filled_qty}/{qty} — "
-                f"sizing SL to actual fill"
+                f"{symbol} partial fill: {filled_qty}/{qty} — sizing SL/target to actual fill"
             )
             trade.quantity = filled_qty
             qty            = filled_qty
 
-        # ── Reconcile planned vs actual fill price ────────────────────────────
-        # Asymmetric handling:
-        #   Better fill (favourable slippage)  → keep planned fib SL and target.
-        #     Risk-from-fill shrinks, reward-from-fill grows → free R:R expansion.
-        #   Worse fill (adverse slippage)      → shift SL and target around fill,
-        #     preserving the intended risk_per_share and 1.5R reward.
-        # "Better" = closer to anchor_lo for LONG (bought cheaper), closer to
-        # anchor_hi for SHORT (sold dearer) — i.e. fill is in the direction of
-        # the swing, on the favourable side of fib_entry.
-        planned_entry = trade.entry_price
-        planned_sl    = trade.stop_loss
-        planned_tgt   = trade.target_price
-        risk_ps       = abs(planned_entry - planned_sl)
-        target_r      = state.cfg.target_r
-        if avg_fill_px > 0 and risk_ps > 0:
-            if direction == "LONG":
-                better_fill        = avg_fill_px < planned_entry
-                planned_sl_intact  = avg_fill_px > planned_sl   # SL still below fill
-            else:
-                better_fill        = avg_fill_px > planned_entry
-                planned_sl_intact  = avg_fill_px < planned_sl   # SL still above fill
-
-            if better_fill and planned_sl_intact:
-                # Keep planned fib SL & target — let the favourable fill expand R:R.
-                actual_risk  = abs(avg_fill_px - planned_sl)
-                actual_reward = abs(planned_tgt - avg_fill_px)
-                logger.info(
-                    f"{symbol} BETTER fill: planned={planned_entry:.2f} → actual={avg_fill_px:.2f} "
-                    f"| keeping planned sl={planned_sl:.2f} tgt={planned_tgt:.2f} "
-                    f"(risk={actual_risk:.2f}/sh reward={actual_reward:.2f}/sh from fill)"
-                )
-                trade.entry_price = avg_fill_px
-                # stop_loss and target_price stay at planned fib levels
-            else:
-                # Worse fill (or fill past SL) — shift SL/target around fill to
-                # preserve risk_ps and 1.5R reward.
-                if direction == "LONG":
-                    new_sl  = round(avg_fill_px - risk_ps, 2)
-                    new_tgt = round(avg_fill_px + risk_ps * target_r, 2)
-                else:
-                    new_sl  = round(avg_fill_px + risk_ps, 2)
-                    new_tgt = round(avg_fill_px - risk_ps * target_r, 2)
-                logger.info(
-                    f"{symbol} WORSE fill: planned={planned_entry:.2f} → actual={avg_fill_px:.2f} "
-                    f"| sl {planned_sl:.2f}→{new_sl:.2f} tgt {planned_tgt:.2f}→{new_tgt:.2f} "
-                    f"(risk_ps={risk_ps:.2f} preserved)"
-                )
-                trade.entry_price  = avg_fill_px
-                trade.stop_loss    = new_sl
-                trade.target_price = new_tgt
-        elif avg_fill_px <= 0:
-            logger.warning(
-                f"{symbol} broker did not report fill price — using planned "
-                f"entry={planned_entry:.2f} sl={planned_sl:.2f} tgt={planned_tgt:.2f}"
-            )
+        # LIMIT fills are guaranteed at limit-or-better, so planned SL/target
+        # (computed from fib_entry) stay accurate — no drift adjustment needed.
 
         # ── Place OCO (SL + target as one smart order) — 2-attempt retry ──────
         # Native Groww OCO: SL_M trigger (no limit gap → no NSE band rejection)
@@ -1593,24 +1480,41 @@ class LiveTrader:
         state.state = State.DONE
         self._save_state()
 
-    def _wait_for_fill(self, order_id: str, expected: int, max_wait_s: float = 3.0) -> tuple[int, float]:
-        """Poll order status; return (filled_qty, avg_fill_price). qty=0 if rejected/cancelled.
-        avg_fill_price=0 means the broker didn't report it (caller falls back to planned entry)."""
+    def _wait_for_position_fill(self, symbol: str, direction: str,
+                                expected_qty: int, pre_qty: int,
+                                order_id: str,
+                                max_wait_s: float) -> int:
+        """Wait for the broker position to grow by expected_qty in our direction.
+        Position is the truth source — order-status polling doesn't reliably
+        return fill info on Groww. On timeout cancel the order, then recheck
+        position so a fill that landed during the cancel race isn't lost.
+        Returns actual filled qty (0 if nothing landed)."""
         deadline = time.time() + max_wait_s
+        filled   = 0
         while time.time() < deadline:
-            status, filled, avg_px = self.broker.get_order_fill_info(order_id)
-            if status in ("EXECUTED", "COMPLETE", "FILLED"):
-                logger.debug(f"_wait_for_fill({order_id}): {status} qty={filled or expected} avg={avg_px:.2f}")
-                return (filled or expected), avg_px
-            if status in ("REJECTED", "CANCELLED", "FAILED"):
-                logger.error(f"_wait_for_fill({order_id}): terminal status {status}")
-                return 0, 0.0
-            time.sleep(0.5)
-        logger.warning(
-            f"_wait_for_fill({order_id}): timed out after {max_wait_s}s — "
-            f"assuming filled (Groww market orders rarely linger)"
-        )
-        return expected, 0.0   # benefit-of-doubt qty; price unknown → caller uses planned
+            cur = self.broker.get_live_qty(symbol)
+            if cur is not None:
+                delta = (cur - pre_qty) if direction == "LONG" else (pre_qty - cur)
+                filled = max(0, delta)
+                if filled >= expected_qty:
+                    logger.info(f"{symbol} position-confirmed fill: {filled} (pre={pre_qty} cur={cur})")
+                    return expected_qty
+            time.sleep(1.0)
+
+        # Timeout — cancel any unfilled remainder, then take a final position read.
+        # Order may finish filling DURING the cancel call; the post-cancel position
+        # check is the authoritative answer.
+        logger.info(f"{symbol} entry not fully filled within {max_wait_s}s — cancelling and re-checking position")
+        self.broker.cancel_order(order_id)
+        time.sleep(0.5)
+        cur = self.broker.get_live_qty(symbol)
+        if cur is None:
+            logger.warning(f"{symbol} could not read position after cancel — assuming no fill")
+            return 0
+        delta = (cur - pre_qty) if direction == "LONG" else (pre_qty - cur)
+        filled = max(0, delta)
+        logger.info(f"{symbol} post-cancel position read: filled={filled} (pre={pre_qty} cur={cur})")
+        return filled
 
     def _handle_exit(self, state: StockState):
         if not state.trade:
@@ -1656,14 +1560,9 @@ class LiveTrader:
                 )
 
         # Cancel pending OCO smart order before manual market exit. Cancelling
-        # an already-fired OCO is harmless. Legacy sl/target legs (pre-OCO trades
-        # restored from old state file) are cancelled too.
+        # an already-fired OCO is harmless.
         if state.trade.oco_order_id:
             self.broker.cancel_smart_order(state.trade.oco_order_id)
-        if state.trade.sl_order_id:
-            self.broker.cancel_order(state.trade.sl_order_id)
-        if state.trade.target_order_id:
-            self.broker.cancel_order(state.trade.target_order_id)
 
         # Stable exit ref so a transient retry doesn't double-exit.
         # Attempt 2 uses a fresh ref in case attempt 1 was stored by Groww despite failure.
@@ -1700,10 +1599,6 @@ class LiveTrader:
             if st.state == State.IN_TRADE and st.trade:
                 if st.trade.oco_order_id:
                     self.broker.cancel_smart_order(st.trade.oco_order_id)
-                if st.trade.sl_order_id:
-                    self.broker.cancel_order(st.trade.sl_order_id)
-                if st.trade.target_order_id:
-                    self.broker.cancel_order(st.trade.target_order_id)
 
         # Step 2 — read actual open positions from broker
         open_positions = self.broker.get_all_mis_positions()
@@ -1889,8 +1784,6 @@ class LiveTrader:
                     "stop_loss":      s.trade.stop_loss,
                     "target_price":   s.trade.target_price,
                     "entry_time":     s.trade.entry_time,
-                    "sl_order_id":     s.trade.sl_order_id,
-                    "target_order_id": s.trade.target_order_id,
                     "entry_order_id":  s.trade.entry_order_id,
                     "oco_order_id":    s.trade.oco_order_id,
                 }
@@ -1961,8 +1854,6 @@ class LiveTrader:
                         stop_loss       = float(tr["stop_loss"]),
                         target_price    = float(tr["target_price"]),
                         entry_time      = tr.get("entry_time", ""),
-                        sl_order_id     = tr.get("sl_order_id", ""),
-                        target_order_id = tr.get("target_order_id", ""),
                         entry_order_id  = tr.get("entry_order_id", ""),
                         oco_order_id    = tr.get("oco_order_id", ""),
                     )

@@ -1,24 +1,24 @@
-"""Fib-MACD ORB strategy — Groww Cloud. Single-file. Deps: growwapi, pandas, numpy."""
+"""Fib-MACD ORB strategy -- Groww Cloud. Single-file. Deps: growwapi, pandas, numpy."""
 
-# ── CONFIGURATION ─────────────────────────────────────────────────────────────
+# -- CONFIGURATION -------------------------------------------------------------
 # Credentials
-GROWW_API_KEY = "your_api_key"   # ← replace
-GROWW_SECRET  = "your_secret"    # ← replace
+GROWW_API_KEY = "your_api_key"   # <- replace
+GROWW_SECRET  = "your_secret"    # <- replace
 
 # Risk per trade
-DEFAULT_RISK: float = 1000           # ₹ per trade (per stock)
+DEFAULT_RISK: float = 1000           # Rs per trade (per stock)
 RISK_OVERRIDES: dict[str, float] = {}  # e.g. {"SBIN": 2_000}
 
-CAPITAL_PER_TRADE:    float = 3_00_000  # ₹ max capital per position
+CAPITAL_PER_TRADE:    float = 3_00_000  # Rs max capital per position
 MAX_TRADES_PER_DAY:   int   = 10
-MIS_LEVERAGE_DIVISOR: float = 0.20      # ≈5x intraday leverage
+MIS_LEVERAGE_DIVISOR: float = 0.20      # ~=5x intraday leverage
 ENTRY_FILL_WAIT_S:    float = 30        # max seconds to wait for entry fill before cancelling
 MIN_MACD_BARS:        int   = 2
 MACD_WARMUP_DAYS:     int   = 5         # prior trading days for MACD EMA continuity
 
 STATE_DIR: str = "/tmp"   # use "." for local testing
 
-# ── Strategy parameters (Run 7 backtest, Sharpe > 2.5) ────────────────────────
+# -- Strategy parameters (Run 7 backtest, Sharpe > 2.5) ------------------------
 OR_MINUTES       = 30         # Opening range duration in minutes
 FIB_ENTRY_PCT    = 0.618      # Enter at 61.8% retracement
 SL_BUFFER_PCT    = 0.001      # 0.1% buffer beyond 78.6% stop reference
@@ -33,10 +33,10 @@ EXIT_TIME        = "15:00"    # Force-exit all IN_TRADE positions at this time
 MAX_WAIT_BARS    = 60         # Max 1-min bars to wait for fib touch after swing
 
 DRY_RUN = True             # log signals only when True
-LATE_START_MODE = False    # True = replay 09:15→now through state machine on startup
+LATE_START_MODE = False    # True = replay 09:15->now through state machine on startup
 
 # Portfolio: 34 stocks from Run 7 backtest. Format: (NSE_SYMBOL, direction, target_r)
-# direction ∈ {long_only, short_only, both}
+# direction in {long_only, short_only, both}
 PORTFOLIO = [
     # ("LTIM",        "long_only",  1.5),  # symbol mismatch on Groww (LTIMINDTREE?)
     # ("TATAMOTORS",  "short_only", 1.5),  # symbol mismatch post-demerger
@@ -74,7 +74,7 @@ PORTFOLIO = [
     ("SBIN",        "both",       1.5),
 ]
 
-# ── END OF CONFIGURATION ──────────────────────────────────────────────────────
+# -- END OF CONFIGURATION ------------------------------------------------------
 
 import json
 import logging
@@ -91,7 +91,7 @@ import numpy as np
 import pandas as pd
 from growwapi import GrowwAPI
 
-# ── Logging ───────────────────────────────────────────────────────────────────
+# -- Logging -------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -100,23 +100,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger("GrowwFibMACD")
 
-# ── Market hours ──────────────────────────────────────────────────────────────
+# -- Market hours --------------------------------------------------------------
 MARKET_OPEN   = "09:15"
 MARKET_CLOSE  = "15:18"   # emergency_exit_all fires here as safety net before broker auto-squares MIS at 15:20
                           # (state machine force-exits at EXIT_TIME=15:00, this catches any stragglers)
-LTP_POLL_SECS = 15   # poll LTP every 15 s → 4 samples per 1-min candle
+LTP_POLL_SECS = 15   # poll LTP every 15 s -> 4 samples per 1-min candle
 
 _oe_h, _oe_m = divmod(9 * 60 + 15 + OR_MINUTES, 60)
-OR_END = f"{_oe_h:02d}:{_oe_m:02d}"   # "09:45" — first minute after the opening range
+OR_END = f"{_oe_h:02d}:{_oe_m:02d}"   # "09:45" -- first minute after the opening range
 
-# ── Groww API constants ────────────────────────────────────────────────────────
-# Confirmed from Groww sample script — these live on the GrowwAPI instance.
+# -- Groww API constants --------------------------------------------------------
+# Confirmed from Groww sample script -- these live on the GrowwAPI instance.
 # We resolve them after the first connect() call in GrowwBroker.
 # Defaults (strings) are fallbacks if the SDK version changes constant names.
 _NSE    = "NSE"
 _CASH   = "CASH"
 _DAY    = "DAY"
-_MIS    = "MIS"      # Margin Intraday Square-off — confirmed in annexures
+_MIS    = "MIS"      # Margin Intraday Square-off -- confirmed in annexures
 _MARKET = "MARKET"
 _LIMIT  = "LIMIT"
 _SL_M   = "SL_M"     # Stop Loss Market (used in OCO stop_loss leg)
@@ -131,9 +131,9 @@ _FILLED_STATES = ("EXECUTED", "COMPLETED", "DELIVERY_AWAITED")
 _DEAD_STATES   = ("REJECTED", "FAILED", "CANCELLED")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 #  DATA CLASSES
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 
 @dataclass
 class StockCfg:
@@ -172,9 +172,9 @@ class OrderResult:
     message:  str
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  STATE MACHINE — per stock
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
+#  STATE MACHINE -- per stock
+# ===============================================================================
 
 class State(Enum):
     WAITING_OR       = auto()
@@ -207,7 +207,7 @@ class StockState:
         self.trade:           Optional[OpenTrade]  = None
         self.macd_5m:         pd.DataFrame = pd.DataFrame()
         # Pre-today 1-min candles fetched at startup. Prepended to every
-        # MACD computation so EMA(26) is continuous across day boundaries —
+        # MACD computation so EMA(26) is continuous across day boundaries --
         # matches backtest behaviour where MACD spans the full history.
         self.warmup_candles_1m: list[dict] = []
 
@@ -224,7 +224,7 @@ class StockState:
         if self.state == State.IN_TRADE:         return self._handle_in_trade(candle, t)
         return None
 
-    # ── State handlers ────────────────────────────────────────────────────────
+    # -- State handlers --------------------------------------------------------
 
     def _handle_or(self, candle, t):
         if t < OR_END:
@@ -272,7 +272,7 @@ class StockState:
 
         self.swing_bars += 1
         if self.swing_bars > MAX_WAIT_BARS:
-            logger.info(f"{self.symbol} swing timeout — skipping today")
+            logger.info(f"{self.symbol} swing timeout -- skipping today")
             self.state = State.DONE
             return None
 
@@ -300,13 +300,13 @@ class StockState:
 
         s = self.setup
 
-        # Invalidation — price blew through 78.6% stop zone
+        # Invalidation -- price blew through 78.6% stop zone
         if self.breakout_dir == "LONG" and candle["close"] <= s.stop_loss:
-            logger.info(f"{self.symbol} LONG invalidated: close={candle['close']:.2f} ≤ sl_zone={s.stop_loss:.2f}")
+            logger.info(f"{self.symbol} LONG invalidated: close={candle['close']:.2f} <= sl_zone={s.stop_loss:.2f}")
             self.state = State.DONE
             return None
         if self.breakout_dir == "SHORT" and candle["close"] >= s.stop_loss:
-            logger.info(f"{self.symbol} SHORT invalidated: close={candle['close']:.2f} ≥ sl_zone={s.stop_loss:.2f}")
+            logger.info(f"{self.symbol} SHORT invalidated: close={candle['close']:.2f} >= sl_zone={s.stop_loss:.2f}")
             self.state = State.DONE
             return None
 
@@ -379,7 +379,7 @@ class StockState:
 
         return None
 
-    # ── Helpers ────────────────────────────────────────────────────────────────
+    # -- Helpers ----------------------------------------------------------------
 
     def _build_setup(self):
         if self.breakout_dir == "LONG":
@@ -430,12 +430,12 @@ class StockState:
         logger.debug(
             f"{self.symbol} sizing: entry={entry:.2f} sl={sl:.2f} "
             f"risk_ps={risk_ps:.2f} | "
-            f"risk_cap={risk_cap} (₹{self.cfg.risk}/₹{risk_ps:.2f}/share) | "
-            f"capital_cap={capital_cap} (₹{CAPITAL_PER_TRADE}/₹{entry:.2f}/share) | "
-            f"limiting factor={'RISK' if risk_cap <= capital_cap else 'CAPITAL'} → qty={qty}"
+            f"risk_cap={risk_cap} (Rs{self.cfg.risk}/Rs{risk_ps:.2f}/share) | "
+            f"capital_cap={capital_cap} (Rs{CAPITAL_PER_TRADE}/Rs{entry:.2f}/share) | "
+            f"limiting factor={'RISK' if risk_cap <= capital_cap else 'CAPITAL'} -> qty={qty}"
         )
         if qty <= 0:
-            logger.info(f"{self.symbol} qty=0 (risk_ps={risk_ps:.2f} too large or entry=0) — skipping entry")
+            logger.info(f"{self.symbol} qty=0 (risk_ps={risk_ps:.2f} too large or entry=0) -- skipping entry")
             self.state = State.DONE
             return None
 
@@ -457,20 +457,20 @@ class StockState:
         logger.info(
             f"{self.symbol} ENTRY {direction} @ {entry:.2f} "
             f"qty={qty} sl={sl:.2f} tgt={target:.2f} "
-            f"risk=₹{risk_ps*qty:.0f}"
+            f"risk=Rs{risk_ps*qty:.0f}"
         )
         return f"enter_{direction.lower()}"
 
     def _check_macd(self, t: str, direction: str) -> bool:
         if MACD_CONDITION == "none":
-            logger.debug(f"{self.symbol} MACD check: condition='none' → PASS (always)")
+            logger.debug(f"{self.symbol} MACD check: condition='none' -> PASS (always)")
             return True
         # With MACD_WARMUP_DAYS prior days seeding the EMA, only 2 bars in
         # today's session are needed before MACD is reliable (matches backtest).
         if self.macd_5m.empty or len(self.macd_5m) < MIN_MACD_BARS:
             logger.info(
                 f"{self.symbol} MACD check: only {len(self.macd_5m)} bars "
-                f"(< MIN_MACD_BARS={MIN_MACD_BARS}) → PASS (no filter)"
+                f"(< MIN_MACD_BARS={MIN_MACD_BARS}) -> PASS (no filter)"
             )
             return True
 
@@ -483,7 +483,7 @@ class StockState:
         relevant = self.macd_5m[self.macd_5m["time_str"] <= ts]
         if len(relevant) < 2:
             logger.info(
-                f"{self.symbol} MACD check: only {len(relevant)} relevant bars at {t} → PASS (no filter)"
+                f"{self.symbol} MACD check: only {len(relevant)} relevant bars at {t} -> PASS (no filter)"
             )
             return True
 
@@ -498,7 +498,7 @@ class StockState:
             logger.info(
                 f"{self.symbol} MACD cross check ({direction}) at {t}: "
                 f"macd={macd_val:.4f} signal={sig_val:.4f} hist={hist_val:.4f} "
-                f"→ {'PASS ✓' if passed else 'FAIL ✗'}"
+                f"-> {'PASS OK' if passed else 'FAIL X'}"
             )
             return passed
 
@@ -506,16 +506,16 @@ class StockState:
             passed = (hist_val > 0) if direction == "LONG" else (hist_val < 0)
             logger.info(
                 f"{self.symbol} MACD histogram_positive ({direction}) at {t}: "
-                f"hist={hist_val:.4f} → {'PASS ✓' if passed else 'FAIL ✗'}"
+                f"hist={hist_val:.4f} -> {'PASS OK' if passed else 'FAIL X'}"
             )
             return passed
 
         return True
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 #  GROWW BROKER
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 
 def _ref_id() -> str:
     """12-char unique order reference (Groww needs 8-20 alphanum chars)."""
@@ -540,7 +540,7 @@ def _round_tick(price: float) -> float:
 
 
 def _attr(obj, key):
-    """Read key from dict or object attribute — handles both SDK response styles."""
+    """Read key from dict or object attribute -- handles both SDK response styles."""
     if isinstance(obj, dict):
         return obj.get(key)
     return getattr(obj, key, None)
@@ -572,9 +572,9 @@ class GrowwBroker:
             _SELL   = getattr(self._g, "TRANSACTION_TYPE_SELL",           _SELL)
             _OCO    = getattr(self._g, "SMART_ORDER_TYPE_OCO",            _OCO)
 
-            logger.info("Groww broker connected ✓")
+            logger.info("Groww broker connected OK")
             logger.info(
-                f"API constants → NSE={_NSE!r} CASH={_CASH!r} DAY={_DAY!r} "
+                f"API constants -> NSE={_NSE!r} CASH={_CASH!r} DAY={_DAY!r} "
                 f"MIS={_MIS!r} MARKET={_MARKET!r} LIMIT={_LIMIT!r} "
                 f"SL_M={_SL_M!r} BUY={_BUY!r} SELL={_SELL!r} OCO={_OCO!r}"
             )
@@ -591,7 +591,7 @@ class GrowwBroker:
             logger.debug(f"get_candles_historical({symbol}): stagger sleep {_stagger_s:.1f}s")
             time.sleep(_stagger_s)
 
-        logger.debug(f"get_candles_historical({symbol}): {from_dt}  →  {to_dt} (sleeping 1.5s)")
+        logger.debug(f"get_candles_historical({symbol}): {from_dt}  ->  {to_dt} (sleeping 1.5s)")
         time.sleep(1.5)   # conservative rate-limit guard
 
         for attempt in (1, 2):
@@ -604,7 +604,7 @@ class GrowwBroker:
                     end_time        = to_dt,
                     candle_interval = self._g.CANDLE_INTERVAL_MIN_1,
                 )
-                break   # success — exit retry loop
+                break   # success -- exit retry loop
             except Exception as e:
                 err_str = str(e).lower()
                 is_transient = any(kw in err_str for kw in
@@ -614,7 +614,7 @@ class GrowwBroker:
                     retry_sleep = 10 if "rate limit" in err_str else 3
                     logger.warning(
                         f"get_candles_historical({symbol}): transient error "
-                        f"(attempt 1) — retrying in {retry_sleep}s: {e}"
+                        f"(attempt 1) -- retrying in {retry_sleep}s: {e}"
                     )
                     time.sleep(retry_sleep)
                     continue
@@ -629,7 +629,7 @@ class GrowwBroker:
             for c in raw:
                 # Groww returns 2 pre-market entries per day where OHLC is None
                 # but volume is set (bookkeeping data). These are expected and
-                # NOT errors — silently skip them.
+                # NOT errors -- silently skip them.
                 if (len(c) >= 5
                         and c[1] is None and c[2] is None
                         and c[3] is None and c[4] is None):
@@ -671,9 +671,9 @@ class GrowwBroker:
             if premarket_skipped:
                 logger.debug(f"get_candles_historical({symbol}): skipped {premarket_skipped} pre-market None-OHLC entries")
             if parse_errs and parse_errs == len(raw) - premarket_skipped:
-                logger.error(f"get_candles_historical({symbol}): ALL real candles failed to parse — timestamp format change?")
+                logger.error(f"get_candles_historical({symbol}): ALL real candles failed to parse -- timestamp format change?")
             if candles:
-                logger.debug(f"get_candles_historical({symbol}): {len(candles)} candles [{candles[0]['datetime'][11:16]} – {candles[-1]['datetime'][11:16]}]")
+                logger.debug(f"get_candles_historical({symbol}): {len(candles)} candles [{candles[0]['datetime'][11:16]} - {candles[-1]['datetime'][11:16]}]")
             else:
                 # Common causes: subscription expired, wrong symbol prefix, date format, or response wrapped in payload.candles.
                 logger.warning(f"get_candles_historical({symbol}): 0 candles returned (check date range / subscription)")
@@ -689,7 +689,7 @@ class GrowwBroker:
             return {}
         exchange_syms = tuple(f"NSE_{s}" for s in symbols[:50])
         logger.debug(
-            f"get_ltp_batch: requesting {len(exchange_syms)} symbols — "
+            f"get_ltp_batch: requesting {len(exchange_syms)} symbols -- "
             f"{', '.join(exchange_syms[:5])}{'...' if len(exchange_syms) > 5 else ''}"
         )
         try:
@@ -700,7 +700,7 @@ class GrowwBroker:
             result: dict[str, float] = {}
             if isinstance(resp, dict):
                 for k, v in resp.items():
-                    sym = k.replace("NSE_", "", 1)   # "NSE_SBIN" → "SBIN"
+                    sym = k.replace("NSE_", "", 1)   # "NSE_SBIN" -> "SBIN"
                     if isinstance(v, (int, float)):
                         result[sym] = float(v)
                     elif isinstance(v, dict):
@@ -711,7 +711,7 @@ class GrowwBroker:
             missing = [s for s in symbols if result.get(s, 0) == 0]
             if missing:
                 logger.warning(f"get_ltp_batch: {len(missing)} symbols missing/zero: {missing}")
-            logger.debug(f"get_ltp_batch: {len(result)} prices received — sample: {dict(list(result.items())[:4])}")
+            logger.debug(f"get_ltp_batch: {len(result)} prices received -- sample: {dict(list(result.items())[:4])}")
             return result
         except Exception as e:
             logger.error(f"get_ltp_batch: {e}")
@@ -722,9 +722,9 @@ class GrowwBroker:
         """Market order. Stable ref_id makes retries idempotent (Groww rejects duplicate refs)."""
         txn = _BUY if action.lower() == "buy" else _SELL
         ref = ref_id or _ref_id()
-        logger.info(f"place_market_order → {symbol} txn={txn} qty={qty} order_type={_MARKET} product={_MIS} ref={ref}")
+        logger.info(f"place_market_order -> {symbol} txn={txn} qty={qty} order_type={_MARKET} product={_MIS} ref={ref}")
         try:
-            # price intentionally omitted for MARKET — Groww docs say price/trigger_price shouldn't be sent.
+            # price intentionally omitted for MARKET -- Groww docs say price/trigger_price shouldn't be sent.
             resp = self._g.place_order(
                 trading_symbol     = symbol,
                 quantity           = qty,
@@ -739,20 +739,20 @@ class GrowwBroker:
             logger.debug(f"place_market_order({symbol}) raw response: {resp}")
             oid = _attr(resp, "groww_order_id") or ""
             if oid:
-                logger.info(f"place_market_order({symbol}): order accepted — groww_order_id={oid}")
+                logger.info(f"place_market_order({symbol}): order accepted -- groww_order_id={oid}")
                 return OrderResult(True, oid, _attr(resp, "order_status") or "")
             msg = _attr(resp, "remark") or str(resp)
-            logger.error(f"place_market_order({symbol}): REJECTED — {msg}")
+            logger.error(f"place_market_order({symbol}): REJECTED -- {msg}")
             return OrderResult(False, "", msg)
         except Exception as e:
-            logger.error(f"place_market_order({symbol}): exception — {e}")
+            logger.error(f"place_market_order({symbol}): exception -- {e}")
             return OrderResult(False, "", str(e))
 
     def place_oco_order(self, symbol: str, direction: str, qty: int,
                         sl_trigger: float, target_price: float,
                         ref_id: Optional[str] = None) -> OrderResult:
         """OCO smart order: SL_M (price=None) + LIMIT target.
-        net_position_quantity is SIGNED — +qty for LONG, -qty for SHORT. Sending
+        net_position_quantity is SIGNED -- +qty for LONG, -qty for SHORT. Sending
         +qty for SHORT makes Groww fire SELL legs that ADD to the short."""
         exit_side  = _SELL if direction == "LONG" else _BUY
         net_pos    = qty if direction == "LONG" else -qty
@@ -806,9 +806,9 @@ class GrowwBroker:
             status = str(_attr(resp, "status") or "")
             ok     = "CANCEL" in status.upper() or bool(_attr(resp, "smart_order_id"))
             if ok:
-                logger.info(f"cancel_smart_order({smart_order_id}): ✓ status={status!r}")
+                logger.info(f"cancel_smart_order({smart_order_id}): OK status={status!r}")
             else:
-                logger.warning(f"cancel_smart_order({smart_order_id}): uncertain — status={status!r} resp={resp}")
+                logger.warning(f"cancel_smart_order({smart_order_id}): uncertain -- status={status!r} resp={resp}")
             return ok
         except Exception as e:
             logger.error(f"cancel_smart_order({smart_order_id}): {e}")
@@ -831,16 +831,16 @@ class GrowwBroker:
                 segment        = self._g.SEGMENT_CASH,
             )
             if resp is None:
-                logger.debug(f"get_live_qty({symbol}): no position record — returning 0 (flat)")
+                logger.debug(f"get_live_qty({symbol}): no position record -- returning 0 (flat)")
                 return 0   # no position found
             credit = int(_attr(resp, "credit_quantity") or 0)
             debit  = int(_attr(resp, "debit_quantity")  or 0)
             net    = credit - debit
-            logger.debug(f"get_live_qty({symbol}): credit={credit} debit={debit} → net={net}")
+            logger.debug(f"get_live_qty({symbol}): credit={credit} debit={debit} -> net={net}")
             return net
         except Exception as e:
             logger.warning(f"get_live_qty({symbol}): {e}")
-            return None   # unknown — don't skip the exit
+            return None   # unknown -- don't skip the exit
 
     def get_all_mis_positions(self) -> list[dict]:
         """Open MIS positions as [{symbol, net_qty}]. net_qty > 0 long, < 0 short. [] on error/flat."""
@@ -860,7 +860,7 @@ class GrowwBroker:
                 result.append({"symbol": _attr(p, "trading_symbol"), "net_qty": net})
             if result:
                 detail = ", ".join(f"{p['symbol']}={p['net_qty']:+d}" for p in result)
-                logger.info(f"get_all_mis_positions: {len(result)} open MIS position(s) — {detail}")
+                logger.info(f"get_all_mis_positions: {len(result)} open MIS position(s) -- {detail}")
             else:
                 logger.info("get_all_mis_positions: no open MIS positions found")
             return result
@@ -911,22 +911,22 @@ class GrowwBroker:
             status = str(_attr(resp, "order_status") or "")
             ok     = "CANCEL" in status.upper() or bool(_attr(resp, "groww_order_id"))
             if ok:
-                logger.info(f"cancel_order({order_id}): ✓ status={status!r}")
+                logger.info(f"cancel_order({order_id}): OK status={status!r}")
             else:
-                logger.warning(f"cancel_order({order_id}): uncertain — status={status!r} resp={resp}")
+                logger.warning(f"cancel_order({order_id}): uncertain -- status={status!r} resp={resp}")
             return ok
         except Exception as e:
             logger.error(f"cancel_order({order_id}): {e}")
             return False
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 #  LIVE TRADER ORCHESTRATOR
 #
 #  Groww Cloud "Daily" deployment runs this script as a LONG-RUNNING PROCESS
 #  from Start time (09:15) to End time (15:30). The while-loop polls every
-#  60 seconds — exactly right for this deployment model.
-# ═══════════════════════════════════════════════════════════════════════════════
+#  60 seconds -- exactly right for this deployment model.
+# ===============================================================================
 
 def _ema(values: np.ndarray, period: int) -> np.ndarray:
     return pd.Series(values).ewm(span=period, adjust=False).mean().values
@@ -939,7 +939,7 @@ class LiveTrader:
         self.broker       = broker
         self.states       = stock_states
         self._or_built    = False
-        self._prev_ltps:  dict[str, float] = {}   # last LTP → used as next candle open
+        self._prev_ltps:  dict[str, float] = {}   # last LTP -> used as next candle open
         self._min_ltps:   dict[str, list]  = {}   # LTP samples in current minute
         self._last_min:   str              = ""   # last minute we emitted a candle for
         self._last_pnl_log_min: str        = ""   # last 15-min slot we logged P&L for
@@ -952,15 +952,15 @@ class LiveTrader:
         # after replay completes and _replaying is set back to False.
         if LATE_START_MODE:
             logger.warning(
-                "LATE_START_MODE=True — replaying historical candles to rebuild "
+                "LATE_START_MODE=True -- replaying historical candles to rebuild "
                 f"state. {'DRY RUN: no orders during replay or after.' if DRY_RUN else 'LIVE: no orders during replay; live orders fire after replay completes.'}"
             )
 
         if not self.broker.connect():
-            logger.error("Broker connection failed — aborting")
+            logger.error("Broker connection failed -- aborting")
             return
 
-        # Always start with a clean per-stock state object — _load_state will
+        # Always start with a clean per-stock state object -- _load_state will
         # then overlay any persisted state on top.
         for s in self.states.values():
             s.reset()
@@ -971,7 +971,7 @@ class LiveTrader:
         self._last_pnl_log_min = ""
         self._trades_today = 0
 
-        # ── Crash recovery: load state if we restarted mid-session ────────────
+        # -- Crash recovery: load state if we restarted mid-session ------------
         restored = self._load_state()
         if restored:
             self._reconcile_with_broker()
@@ -999,7 +999,7 @@ class LiveTrader:
                 continue
 
             if time_str >= MARKET_CLOSE:
-                logger.info("Market closed — emergency exit all positions")
+                logger.info("Market closed -- emergency exit all positions")
                 self._emergency_exit_all()
                 break
 
@@ -1008,23 +1008,23 @@ class LiveTrader:
 
         self._print_summary()
 
-    # ── Per-tick logic (runs every 15 s) ───────────────────────────────────────
+    # -- Per-tick logic (runs every 15 s) ---------------------------------------
 
     def _tick(self, now: datetime):
         today    = now.strftime("%Y-%m-%d")
         time_str = now.strftime("%H:%M")
 
-        # ── Phase 1: build OR once after the opening range period ends ────────
+        # -- Phase 1: build OR once after the opening range period ends --------
         if not self._or_built:
             if time_str < OR_END:
-                return   # still in OR period — nothing to do
+                return   # still in OR period -- nothing to do
             self._build_or(today, OR_END)
             return
 
-        # ── Phase 2: poll LTP for all active stocks — ONE API call ────────────
+        # -- Phase 2: poll LTP for all active stocks -- ONE API call ------------
         active = [s for s, st in self.states.items() if st.state != State.DONE]
         if not active:
-            logger.info("_tick: all stocks DONE — nothing to poll")
+            logger.info("_tick: all stocks DONE -- nothing to poll")
             return
 
         logger.debug(f"_tick: polling LTP for {len(active)} active stock(s) at {time_str}")
@@ -1040,7 +1040,7 @@ class LiveTrader:
         if missing_ltp:
             logger.warning(f"_tick: {len(missing_ltp)} stocks returned 0/no LTP: {missing_ltp}")
 
-        # ── 15-min P&L heartbeat for open positions ───────────────────────────
+        # -- 15-min P&L heartbeat for open positions ---------------------------
         # Fires at :00, :15, :30, :45. Once per slot, even if _tick runs
         # multiple times during the same minute.
         cur_min = now.strftime("%H:%M")
@@ -1048,7 +1048,7 @@ class LiveTrader:
             self._log_open_pnl(ltp_map)
             self._last_pnl_log_min = cur_min
 
-        # ── Phase 3: at the start of each new minute, emit synthetic candles ──
+        # -- Phase 3: at the start of each new minute, emit synthetic candles --
         # Emit a candle for the minute that just COMPLETED (_last_min), using
         # samples that were accumulated during that minute.  cur_min is then
         # recorded so we know when the next minute boundary arrives.
@@ -1057,11 +1057,11 @@ class LiveTrader:
                 self._emit_candles(today, self._last_min)
             self._last_min = cur_min
 
-    # ── OR build (called once at or_end) ───────────────────────────────────────
+    # -- OR build (called once at or_end) ---------------------------------------
 
     def _build_or(self, today: str, or_end: str):
         """Called once when OR ends. Loads warmup + today candles to seed MACD & build OR."""
-        # ── Multi-day fetch: warmup (prior days) + today ──────────────────────
+        # -- Multi-day fetch: warmup (prior days) + today ----------------------
         # Backtest computes MACD on a continuous close series spanning the full
         # data history, so EMA(26) is fully stable by the time today starts.
         # We replicate that by fetching MACD_WARMUP_DAYS of prior 1-min candles
@@ -1074,15 +1074,15 @@ class LiveTrader:
         if LATE_START_MODE:
             to_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             logger.warning(
-                f"⚠ LATE_START_MODE active — replaying {today} 09:15 → {to_dt[11:]} "
-                f"with {MACD_WARMUP_DAYS}d MACD warmup ({from_dt[:10]} → today). "
+                f"! LATE_START_MODE active -- replaying {today} 09:15 -> {to_dt[11:]} "
+                f"with {MACD_WARMUP_DAYS}d MACD warmup ({from_dt[:10]} -> today). "
                 f"No real orders will be fired during replay."
             )
             self._replaying = True
         else:
             to_dt = f"{today} {or_end}:59"
             logger.info(
-                f"OR period ended ({or_end}) — loading historical candles "
+                f"OR period ended ({or_end}) -- loading historical candles "
                 f"({MACD_WARMUP_DAYS}d MACD warmup + today)..."
             )
 
@@ -1091,7 +1091,7 @@ class LiveTrader:
         for symbol, state in self.states.items():
             all_candles = self.broker.get_candles_historical(symbol, from_dt, to_dt)
             if not all_candles:
-                logger.warning(f"{symbol}: no candles returned at all — marking DONE")
+                logger.warning(f"{symbol}: no candles returned at all -- marking DONE")
                 state.state = State.DONE
                 continue
 
@@ -1103,7 +1103,7 @@ class LiveTrader:
             if not today_candles:
                 logger.warning(
                     f"{symbol}: warmup loaded ({len(warmup_candles)} candles) "
-                    f"but no today candles — DONE"
+                    f"but no today candles -- DONE"
                 )
                 state.state = State.DONE
                 continue
@@ -1159,11 +1159,11 @@ class LiveTrader:
 
         logger.info(f"Historical candles loaded for {loaded_ok}/{len(self.states)} stocks")
 
-        # ── Replay summary (LATE_START_MODE only) ────────────────────────────
+        # -- Replay summary (LATE_START_MODE only) ----------------------------
         if LATE_START_MODE:
             self._replaying = False
             logger.warning("=" * 60)
-            logger.warning(f"REPLAY COMPLETE — {len(replay_signals)} signal(s) fired during replay:")
+            logger.warning(f"REPLAY COMPLETE -- {len(replay_signals)} signal(s) fired during replay:")
             for sig in replay_signals:
                 logger.warning(f"  {sig}")
             logger.warning("=" * 60)
@@ -1175,7 +1175,7 @@ class LiveTrader:
             self._save_state()
             return
 
-        # ── Normal path: synthesize trigger candle at or_end using fresh LTP ──
+        # -- Normal path: synthesize trigger candle at or_end using fresh LTP --
         logger.info("Fetching LTP batch for OR trigger candles...")
         ltp_map = self.broker.get_ltp_batch(list(self.states.keys()))
         for symbol, state in self.states.items():
@@ -1183,7 +1183,7 @@ class LiveTrader:
                 continue
             ltp = ltp_map.get(symbol) or self._prev_ltps.get(symbol, 0)
             if ltp <= 0:
-                logger.warning(f"{symbol}: no LTP for trigger candle — skipping")
+                logger.warning(f"{symbol}: no LTP for trigger candle -- skipping")
                 continue
             logger.debug(f"{symbol} trigger candle: LTP={ltp:.2f}")
             trigger = {
@@ -1200,19 +1200,19 @@ class LiveTrader:
                 self._handle_exit(state)
 
         active_n = sum(1 for s in self.states.values() if s.state != State.DONE)
-        logger.info(f"OR built — {active_n}/{len(self.states)} stocks active")
+        logger.info(f"OR built -- {active_n}/{len(self.states)} stocks active")
         self._or_built  = True
         self._last_min  = or_end
         self._save_state()                      # checkpoint: OR build complete
 
-    # ── Emit synthetic candles from accumulated LTP samples ───────────────────
+    # -- Emit synthetic candles from accumulated LTP samples -------------------
 
     def _emit_candles(self, today: str, cur_min: str):
         """Build a 1-min synthetic candle from LTP samples and feed each stock's state machine.
         Refreshes MACD in parallel for near-entry stocks first."""
-        # ── Parallel MACD refresh for near-entry stocks ───────────────────────
+        # -- Parallel MACD refresh for near-entry stocks -----------------------
         # Each get_candles_historical call sleeps 1.5s + HTTP round-trip.
-        # Running them concurrently keeps total delay ≈ one call instead of N×.
+        # Running them concurrently keeps total delay ~= one call instead of Nx.
         near_entry = [
             sym for sym, st in self.states.items()
             if st.state in (State.WAITING_FIB, State.WAITING_ENTRY)
@@ -1222,7 +1222,7 @@ class LiveTrader:
             to_dt   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             # Stagger requests 0.5s apart so all threads don't hit the API
-            # simultaneously — thundering herd causes timeouts/disconnects.
+            # simultaneously -- thundering herd causes timeouts/disconnects.
             def _fetch(idx_sym):
                 idx, sym = idx_sym
                 return sym, self.broker.get_candles_historical(
@@ -1240,9 +1240,9 @@ class LiveTrader:
                     if hist:
                         self._update_macd_from_1m(st, st.warmup_candles_1m + hist)
                     else:
-                        logger.warning(f"{sym}: MACD refresh returned no candles — using stale MACD")
+                        logger.warning(f"{sym}: MACD refresh returned no candles -- using stale MACD")
 
-        # ── Emit synthetic candles ────────────────────────────────────────────
+        # -- Emit synthetic candles --------------------------------------------
         for symbol, state in self.states.items():
             if state.state == State.DONE:
                 continue
@@ -1250,20 +1250,20 @@ class LiveTrader:
             samples = self._min_ltps.get(symbol) or []
             if not samples:
                 if state.state == State.IN_TRADE:
-                    # Never skip a candle while in a live position — synthesize a
+                    # Never skip a candle while in a live position -- synthesize a
                     # flat candle from prev_ltp so SL/target checks keep running.
                     prev_ltp = self._prev_ltps.get(symbol)
                     if prev_ltp:
                         samples = [prev_ltp]
                         logger.warning(
-                            f"{symbol}: no LTP samples while IN_TRADE — "
+                            f"{symbol}: no LTP samples while IN_TRADE -- "
                             f"synthesising flat candle from prev={prev_ltp:.2f}"
                         )
                     else:
-                        logger.warning(f"{symbol}: IN_TRADE but no LTP or prev — candle skipped")
+                        logger.warning(f"{symbol}: IN_TRADE but no LTP or prev -- candle skipped")
                         continue
                 else:
-                    logger.debug(f"{symbol}: no LTP samples for minute {cur_min} — candle skipped")
+                    logger.debug(f"{symbol}: no LTP samples for minute {cur_min} -- candle skipped")
                     continue
 
             prev   = self._prev_ltps.get(symbol, samples[0])
@@ -1282,7 +1282,7 @@ class LiveTrader:
                 f"({len(samples)} LTP samples) state={state.state.name}"
             )
 
-            # ── OCO is now server-side via create_smart_order: when SL trigger
+            # -- OCO is now server-side via create_smart_order: when SL trigger
             # fires or target limit fills, Groww auto-cancels the other leg.
             # The candle-poll SL/TP check in _handle_in_trade still runs as a
             # backup; if Groww's OCO already fired, get_live_qty in
@@ -1300,7 +1300,7 @@ class LiveTrader:
         self._log_status()
         self._save_state()                      # minute-boundary checkpoint
 
-    # ── Order handling ─────────────────────────────────────────────────────────
+    # -- Order handling ---------------------------------------------------------
 
     def _handle_entry(self, state: StockState):
         trade     = state.trade
@@ -1310,7 +1310,7 @@ class LiveTrader:
         buy_sell  = "buy" if direction == "LONG" else "sell"
 
         if self._replaying:
-            logger.debug(f"{symbol} _handle_entry called during replay — skipping order placement")
+            logger.debug(f"{symbol} _handle_entry called during replay -- skipping order placement")
             return
 
         if DRY_RUN:
@@ -1324,28 +1324,28 @@ class LiveTrader:
             self._save_state()
             return
 
-        # ── Pre-flight: daily loss / trade-count circuit breaker ──────────────
+        # -- Pre-flight: daily loss / trade-count circuit breaker --------------
         if self._trades_today >= MAX_TRADES_PER_DAY:
             logger.warning(
-                f"{symbol} entry SKIPPED — MAX_TRADES_PER_DAY ({MAX_TRADES_PER_DAY}) reached"
+                f"{symbol} entry SKIPPED -- MAX_TRADES_PER_DAY ({MAX_TRADES_PER_DAY}) reached"
             )
             state.state = State.DONE
             state.trade = None
             return
 
-        # ── Pre-flight: margin check ──────────────────────────────────────────
+        # -- Pre-flight: margin check ------------------------------------------
         required_margin = trade.entry_price * qty * MIS_LEVERAGE_DIVISOR
         avail_cash      = self.broker.get_available_cash()
         if avail_cash > 0 and avail_cash < required_margin:
             logger.error(
-                f"{symbol} entry SKIPPED — insufficient margin "
-                f"(need ≈₹{required_margin:.0f}, have ₹{avail_cash:.0f})"
+                f"{symbol} entry SKIPPED -- insufficient margin "
+                f"(need ~=Rs{required_margin:.0f}, have Rs{avail_cash:.0f})"
             )
             state.state = State.DONE
             state.trade = None
             return
 
-        # ── Pre-entry idempotency guard ───────────────────────────────────────
+        # -- Pre-entry idempotency guard ---------------------------------------
         # Retry the position read; if still None, ABORT (skipping a legit trade
         # is far safer than firing blind and double-positioning). Catches
         # pre-existing positions (manual trade, /tmp-wipe restart) and the
@@ -1355,23 +1355,23 @@ class LiveTrader:
             pre_qty = self.broker.get_live_qty(symbol)
             if pre_qty is not None:
                 break
-            logger.warning(f"{symbol} pre-entry position read FAILED ({retry + 1}/3) — retrying")
+            logger.warning(f"{symbol} pre-entry position read FAILED ({retry + 1}/3) -- retrying")
             time.sleep(0.5)
 
         if pre_qty is None:
-            logger.error(f"{symbol} entry SKIPPED — position unreadable after 3 attempts (refusing blind fire)")
+            logger.error(f"{symbol} entry SKIPPED -- position unreadable after 3 attempts (refusing blind fire)")
             state.state = State.DONE
             state.trade = None
             self._save_state()
             return
         if pre_qty != 0:
-            logger.error(f"{symbol} entry SKIPPED — existing position (qty={pre_qty:+d}) detected")
+            logger.error(f"{symbol} entry SKIPPED -- existing position (qty={pre_qty:+d}) detected")
             state.state = State.DONE
             state.trade = None
             self._save_state()
             return
 
-        # ── Place MARKET entry — guaranteed fill, accept slippage. ────────────
+        # -- Place MARKET entry -- guaranteed fill, accept slippage. ------------
         # Actual fill price comes from status poll; SL/target shift around it below.
         entry_ref = f"E{symbol[:6]}{uuid.uuid4().hex[:6].upper()}"
         result    = self.broker.place_market_order(
@@ -1390,7 +1390,7 @@ class LiveTrader:
             f"(ref={entry_ref}, pre_qty={pre_qty})"
         )
 
-        # ── Wait for fill via ORDER STATUS (terminal-state aware) ─────────────
+        # -- Wait for fill via ORDER STATUS (terminal-state aware) -------------
         # get_order_status returns status + filled_quantity + average_fill_price
         # in one call; rejections detected in ~1s instead of burning the full wait.
         filled_qty, avg_fill_px = self._wait_for_fill(
@@ -1401,7 +1401,7 @@ class LiveTrader:
         if filled_qty == 0:
             logger.warning(
                 f"{symbol} MARKET entry did not fill within "
-                f"{ENTRY_FILL_WAIT_S}s — abandoning trade"
+                f"{ENTRY_FILL_WAIT_S}s -- abandoning trade"
             )
             state.state = State.DONE
             state.trade = None
@@ -1409,19 +1409,19 @@ class LiveTrader:
             return
         if filled_qty < qty:
             logger.warning(
-                f"{symbol} partial fill: {filled_qty}/{qty} — sizing SL/target to actual fill"
+                f"{symbol} partial fill: {filled_qty}/{qty} -- sizing SL/target to actual fill"
             )
             trade.quantity = filled_qty
             qty            = filled_qty
 
-        # ── Fill price: status response already had it; trade-list is fallback ──
+        # -- Fill price: status response already had it; trade-list is fallback --
         if avg_fill_px <= 0:
             avg_fill_px = self.broker.get_avg_fill_price(result.order_id)
         logger.info(f"{symbol} fill price: avg_fill_px={avg_fill_px:.2f}")
 
-        # ── Reconcile planned vs actual fill price ────────────────────────────
-        # Better fill (favourable slippage) → keep planned fib SL/target, R:R expands.
-        # Worse fill → shift around fill, preserving risk_ps and 1.5R.
+        # -- Reconcile planned vs actual fill price ----------------------------
+        # Better fill (favourable slippage) -> keep planned fib SL/target, R:R expands.
+        # Worse fill -> shift around fill, preserving risk_ps and 1.5R.
         planned_entry = trade.entry_price
         planned_sl    = trade.stop_loss
         planned_tgt   = trade.target_price
@@ -1436,7 +1436,7 @@ class LiveTrader:
                 planned_sl_intact = avg_fill_px < planned_sl
             if better_fill and planned_sl_intact:
                 logger.info(
-                    f"{symbol} BETTER fill: planned={planned_entry:.2f}→actual={avg_fill_px:.2f} "
+                    f"{symbol} BETTER fill: planned={planned_entry:.2f}->actual={avg_fill_px:.2f} "
                     f"| keep sl={planned_sl:.2f} tgt={planned_tgt:.2f}"
                 )
                 trade.entry_price = avg_fill_px
@@ -1448,18 +1448,18 @@ class LiveTrader:
                     new_sl  = round(avg_fill_px + risk_ps, 2)
                     new_tgt = round(avg_fill_px - risk_ps * target_r, 2)
                 logger.info(
-                    f"{symbol} WORSE fill: planned={planned_entry:.2f}→actual={avg_fill_px:.2f} "
-                    f"| sl {planned_sl:.2f}→{new_sl:.2f} tgt {planned_tgt:.2f}→{new_tgt:.2f} (risk={risk_ps:.2f})"
+                    f"{symbol} WORSE fill: planned={planned_entry:.2f}->actual={avg_fill_px:.2f} "
+                    f"| sl {planned_sl:.2f}->{new_sl:.2f} tgt {planned_tgt:.2f}->{new_tgt:.2f} (risk={risk_ps:.2f})"
                 )
                 trade.entry_price  = avg_fill_px
                 trade.stop_loss    = new_sl
                 trade.target_price = new_tgt
         else:
             logger.warning(
-                f"{symbol} no fill price — planned entry={planned_entry:.2f} sl={planned_sl:.2f} tgt={planned_tgt:.2f}"
+                f"{symbol} no fill price -- planned entry={planned_entry:.2f} sl={planned_sl:.2f} tgt={planned_tgt:.2f}"
             )
 
-        # ── Place OCO (SL_M + LIMIT target). Attempt 2 uses a fresh ref since
+        # -- Place OCO (SL_M + LIMIT target). Attempt 2 uses a fresh ref since
         # Groww stores rejected refs (and rejects duplicate retries).
         logger.info(
             f"{symbol} OCO arming: {direction} qty={qty} entry={trade.entry_price:.2f} "
@@ -1477,15 +1477,15 @@ class LiveTrader:
             if oco_res.success:
                 trade.oco_order_id = oco_res.order_id
                 self._save_state()
-                logger.info(f"{symbol} OCO ARMED ✓ (attempt {attempt}): {oco_res.order_id} ref={ref}")
+                logger.info(f"{symbol} OCO ARMED OK (attempt {attempt}): {oco_res.order_id} ref={ref}")
                 return
             logger.warning(f"{symbol} OCO attempt {attempt}/2 FAILED: {oco_res.message} (ref={ref})")
             time.sleep(0.5)
 
-        # Last-resort: OCO failed twice → market-exit to avoid naked exposure.
+        # Last-resort: OCO failed twice -> market-exit to avoid naked exposure.
         exit_side = "sell" if direction == "LONG" else "buy"
         logger.error(
-            f"{symbol} OCO PLACEMENT FAILED TWICE — emergency-exiting "
+            f"{symbol} OCO PLACEMENT FAILED TWICE -- emergency-exiting "
             f"(entry_id={trade.entry_order_id} qty={qty} {direction})"
         )
         emer_ref      = f"X{symbol[:6]}{uuid.uuid4().hex[:6].upper()}"
@@ -1494,7 +1494,7 @@ class LiveTrader:
             logger.warning(f"{symbol} emergency exit placed: {emergency_res.order_id} side={exit_side} qty={qty}")
         else:
             logger.error(
-                f"{symbol} EMERGENCY EXIT ALSO FAILED — MANUAL ACTION REQUIRED! "
+                f"{symbol} EMERGENCY EXIT ALSO FAILED -- MANUAL ACTION REQUIRED! "
                 f"side={exit_side} qty={qty} | {emergency_res.message}"
             )
         state.state = State.DONE
@@ -1532,8 +1532,8 @@ class LiveTrader:
                             return expected_qty, 0.0
             time.sleep(1.0)
 
-        # Timeout — cancel, recheck status + position (cancel-race safe).
-        logger.info(f"{symbol} no terminal status within {max_wait_s}s (last={last_status!r}) — cancelling")
+        # Timeout -- cancel, recheck status + position (cancel-race safe).
+        logger.info(f"{symbol} no terminal status within {max_wait_s}s (last={last_status!r}) -- cancelling")
         self.broker.cancel_order(order_id)
         time.sleep(1.0)
         status, filled, avg_px = self.broker.get_order_status(order_id)
@@ -1543,7 +1543,7 @@ class LiveTrader:
             return min(f, expected_qty), avg_px
         cur = self.broker.get_live_qty(symbol)
         if cur is None:
-            logger.warning(f"{symbol} could not verify after cancel — assuming no fill")
+            logger.warning(f"{symbol} could not verify after cancel -- assuming no fill")
             return 0, 0.0
         delta = (cur - pre_qty) if direction == "LONG" else (pre_qty - cur)
         filled = max(0, min(delta, expected_qty))
@@ -1559,21 +1559,21 @@ class LiveTrader:
         exit_side = "sell" if direction == "LONG" else "buy"
 
         if self._replaying:
-            logger.debug(f"{symbol} _handle_exit called during replay — skipping order placement")
+            logger.debug(f"{symbol} _handle_exit called during replay -- skipping order placement")
             return
 
         if DRY_RUN:
             logger.info(f"[DRY RUN] {symbol} EXIT {exit_side.upper()} {qty}")
             return
 
-        # Verify broker position before exit — guard against SL/manual close → naked position.
+        # Verify broker position before exit -- guard against SL/manual close -> naked position.
         live_qty = self.broker.get_live_qty(symbol)
         if live_qty == 0:
-            logger.info(f"{symbol}: position already flat (SL fired or manual close) — skipping exit")
+            logger.info(f"{symbol}: position already flat (SL fired or manual close) -- skipping exit")
             return
         if live_qty is None:
             logger.warning(
-                f"{symbol}: could not verify live position — using state.trade.quantity={qty}"
+                f"{symbol}: could not verify live position -- using state.trade.quantity={qty}"
             )
             exit_qty = qty
         else:
@@ -1582,14 +1582,14 @@ class LiveTrader:
             if live_qty * expected_sign < 0:
                 logger.error(
                     f"{symbol}: broker position SIGN MISMATCH "
-                    f"(live={live_qty:+d}, expected {direction}) — refusing exit"
+                    f"(live={live_qty:+d}, expected {direction}) -- refusing exit"
                 )
                 return
-            # Use broker's actual qty — handles partial fills correctly
+            # Use broker's actual qty -- handles partial fills correctly
             exit_qty = abs(live_qty)
             if exit_qty != qty:
                 logger.warning(
-                    f"{symbol}: broker qty ({exit_qty}) ≠ state qty ({qty}) — "
+                    f"{symbol}: broker qty ({exit_qty}) != state qty ({qty}) -- "
                     f"using broker qty for exit"
                 )
 
@@ -1611,7 +1611,7 @@ class LiveTrader:
                 break
             logger.error(
                 f"{symbol} EXIT FAILED (attempt {attempt}/2): {result.message}"
-                + (" — MANUAL ACTION REQUIRED!" if attempt == 2 else " — retrying...")
+                + (" -- MANUAL ACTION REQUIRED!" if attempt == 2 else " -- retrying...")
             )
             if attempt == 1:
                 time.sleep(1.0)
@@ -1628,20 +1628,20 @@ class LiveTrader:
                 st.state = State.DONE
             return
 
-        # Step 1 — cancel pending OCO smart orders
+        # Step 1 -- cancel pending OCO smart orders
         for st in self.states.values():
             if st.state == State.IN_TRADE and st.trade:
                 if st.trade.oco_order_id:
                     self.broker.cancel_smart_order(st.trade.oco_order_id)
 
-        # Step 2 — read actual open positions from broker
+        # Step 2 -- read actual open positions from broker
         open_positions = self.broker.get_all_mis_positions()
         if not open_positions:
             logger.info("Emergency exit: no open MIS positions found on broker")
         else:
             logger.warning(f"Emergency exit: {len(open_positions)} open position(s) found")
 
-        # Step 3 — market-exit each open position (stable ref → idempotent)
+        # Step 3 -- market-exit each open position (stable ref -> idempotent)
         for pos in open_positions:
             sym     = pos["symbol"]
             net_qty = pos["net_qty"]
@@ -1653,7 +1653,7 @@ class LiveTrader:
             if res.success:
                 logger.info(f"{sym} emergency exit placed: {res.order_id}")
             else:
-                logger.error(f"{sym} EMERGENCY EXIT FAILED: {res.message} — MANUAL ACTION REQUIRED!")
+                logger.error(f"{sym} EMERGENCY EXIT FAILED: {res.message} -- MANUAL ACTION REQUIRED!")
 
         # Mark all in-trade states as done
         for st in self.states.values():
@@ -1661,7 +1661,7 @@ class LiveTrader:
                 st.state = State.DONE
         self._save_state()
 
-    # ── MACD (computed from resampled 1-min data — no extra API call) ─────────
+    # -- MACD (computed from resampled 1-min data -- no extra API call) ---------
 
     def _update_macd_from_1m(self, state: StockState, candles_1m: list[dict]):
         """Resample 1-min candles to 5-min bars and compute MACD (no extra API call)."""
@@ -1701,7 +1701,7 @@ class LiveTrader:
         except Exception as e:
             logger.warning(f"MACD resample failed for {state.symbol}: {e}")
 
-    # ── Status logging ────────────────────────────────────────────────────────
+    # -- Status logging --------------------------------------------------------
 
     def _log_status(self):
         t_str    = datetime.now().strftime("%H:%M:%S")
@@ -1709,7 +1709,7 @@ class LiveTrader:
         for s in self.states.values():
             by_state.setdefault(s.state.name, []).append(s.symbol)
 
-        # Build summary line: each state → count (and symbols for short lists)
+        # Build summary line: each state -> count (and symbols for short lists)
         parts = []
         state_order = [
             "WAITING_OR", "WAITING_BREAKOUT", "WAITING_SWING",
@@ -1723,14 +1723,14 @@ class LiveTrader:
                 parts.append(f"{name}={len(syms)}({','.join(syms)})")
             else:
                 parts.append(f"{name}={len(syms)}")
-        logger.info(f"[{t_str}] STATUS — {' | '.join(parts)}")
+        logger.info(f"[{t_str}] STATUS -- {' | '.join(parts)}")
 
         # Detailed line for every open trade
         for s in self.states.values():
             if s.state == State.IN_TRADE and s.trade:
                 t = s.trade
                 logger.info(
-                    f"  ↳ {s.symbol} {t.direction} {t.quantity}x "
+                    f"  > {s.symbol} {t.direction} {t.quantity}x "
                     f"entry={t.entry_price:.2f} sl={t.stop_loss:.2f} "
                     f"tgt={t.target_price:.2f} "
                     f"oco_id={t.oco_order_id or 'none'}"
@@ -1741,7 +1741,7 @@ class LiveTrader:
         in_trade = [s for s in self.states.values()
                     if s.state == State.IN_TRADE and s.trade]
         if not in_trade:
-            logger.info(f"[{datetime.now():%H:%M:%S}] P&L heartbeat — no open positions")
+            logger.info(f"[{datetime.now():%H:%M:%S}] P&L heartbeat -- no open positions")
             return
 
         total = 0.0
@@ -1757,21 +1757,21 @@ class LiveTrader:
                   else (t.entry_price - ltp) * t.quantity
             total += pnl
             lines.append(
-                f"  ↳ {s.symbol} {t.direction} {t.quantity}x "
+                f"  > {s.symbol} {t.direction} {t.quantity}x "
                 f"entry={t.entry_price:.2f} ltp={ltp:.2f} "
-                f"pnl=₹{pnl:+,.0f}"
+                f"pnl=Rs{pnl:+,.0f}"
             )
 
         logger.info(
-            f"[{datetime.now():%H:%M:%S}] P&L heartbeat — "
-            f"{len(in_trade)} open | TOTAL ₹{total:+,.0f}"
+            f"[{datetime.now():%H:%M:%S}] P&L heartbeat -- "
+            f"{len(in_trade)} open | TOTAL Rs{total:+,.0f}"
         )
         for line in lines:
             logger.info(line)
         if missing:
-            logger.warning(f"P&L heartbeat: no LTP for {missing} — skipped")
+            logger.warning(f"P&L heartbeat: no LTP for {missing} -- skipped")
 
-    # ── Persistence (crash recovery) ──────────────────────────────────────────
+    # -- Persistence (crash recovery) ------------------------------------------
 
     def _state_file_path(self) -> str:
         """Path to today's state file. New file each calendar day."""
@@ -1834,19 +1834,19 @@ class LiveTrader:
         """Load today's state file. Caller MUST follow with _reconcile_with_broker()."""
         path = self._state_file_path()
         if not os.path.exists(path):
-            logger.info(f"_load_state: no state file at {path} — fresh start")
+            logger.info(f"_load_state: no state file at {path} -- fresh start")
             return False
 
         try:
             with open(path) as f:
                 snap = json.load(f)
         except Exception as e:
-            logger.warning(f"_load_state: corrupt state file ({e}) — fresh start")
+            logger.warning(f"_load_state: corrupt state file ({e}) -- fresh start")
             return False
 
         today = datetime.now().strftime("%Y-%m-%d")
         if snap.get("date") != today:
-            logger.info(f"_load_state: stale state file ({snap.get('date')} ≠ {today}) — fresh start")
+            logger.info(f"_load_state: stale state file ({snap.get('date')} != {today}) -- fresh start")
             return False
 
         self._or_built     = bool(snap.get("or_built", False))
@@ -1913,12 +1913,12 @@ class LiveTrader:
         for pos in open_positions:
             sym = pos["symbol"]
             if sym not in self.states:
-                logger.info(f"_mark_broker_positions_done: {sym} qty={pos['net_qty']:+d} not in portfolio — ignoring")
+                logger.info(f"_mark_broker_positions_done: {sym} qty={pos['net_qty']:+d} not in portfolio -- ignoring")
                 continue
             s = self.states[sym]
             if s.state == State.IN_TRADE:
                 continue   # _reconcile_with_broker already handled this case
-            logger.warning(f"{sym}: broker has OPEN position qty={pos['net_qty']:+d} but state={s.state.name} — DONE")
+            logger.warning(f"{sym}: broker has OPEN position qty={pos['net_qty']:+d} but state={s.state.name} -- DONE")
             s.state = State.DONE
             marked += 1
         if marked:
@@ -1926,9 +1926,9 @@ class LiveTrader:
             self._save_state()
 
     def _reconcile_with_broker(self):
-        """Reconcile in-memory IN_TRADE vs broker: flat→DONE, sign-mismatch→DONE, qty-diff→adopt broker."""
+        """Reconcile in-memory IN_TRADE vs broker: flat->DONE, sign-mismatch->DONE, qty-diff->adopt broker."""
         if DRY_RUN:
-            logger.info("_reconcile_with_broker: DRY_RUN — skipping broker reconciliation")
+            logger.info("_reconcile_with_broker: DRY_RUN -- skipping broker reconciliation")
             return
 
         in_trade_syms = [
@@ -1953,14 +1953,14 @@ class LiveTrader:
 
             if net_qty == 0:
                 logger.warning(
-                    f"  {sym}: state IN_TRADE but broker FLAT — SL fired or manual close. Marking DONE."
+                    f"  {sym}: state IN_TRADE but broker FLAT -- SL fired or manual close. Marking DONE."
                 )
                 s.state = State.DONE
                 continue
 
             if (net_qty > 0) != (expected > 0):
                 logger.error(
-                    f"  {sym}: SIGN MISMATCH — state {tr.direction} qty {tr.quantity}, "
+                    f"  {sym}: SIGN MISMATCH -- state {tr.direction} qty {tr.quantity}, "
                     f"broker net {net_qty:+d}. Manual review required. Marking DONE."
                 )
                 s.state = State.DONE
@@ -1968,7 +1968,7 @@ class LiveTrader:
 
             if abs(net_qty) != abs(expected):
                 logger.warning(
-                    f"  {sym}: qty mismatch — state {tr.quantity}, broker {abs(net_qty)}. "
+                    f"  {sym}: qty mismatch -- state {tr.quantity}, broker {abs(net_qty)}. "
                     f"Adopting broker qty."
                 )
                 tr.quantity = abs(net_qty)
@@ -1986,7 +1986,7 @@ class LiveTrader:
 
         logger.info(
             f"_rehydrate_after_restart: refetching {MACD_WARMUP_DAYS}d MACD warmup "
-            f"({warmup_start} → {to_dt}) for restored stocks..."
+            f"({warmup_start} -> {to_dt}) for restored stocks..."
         )
         n = 0
         for symbol, state in self.states.items():
@@ -1994,7 +1994,7 @@ class LiveTrader:
                 continue
             candles = self.broker.get_candles_historical(symbol, warmup_start, to_dt)
             if not candles:
-                logger.warning(f"_rehydrate_after_restart: {symbol} no candles — MACD stale")
+                logger.warning(f"_rehydrate_after_restart: {symbol} no candles -- MACD stale")
                 continue
             state.warmup_candles_1m = [c for c in candles if c["datetime"][:10] != today]
             self._update_macd_from_1m(state, candles)
@@ -2017,13 +2017,13 @@ class LiveTrader:
         logger.info(f"No trade today: {no_trade}")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 #  ENTRY POINT
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 
 def main():
     print("=" * 60)
-    print("  Fib-MACD Live Trader — Groww Cloud")
+    print("  Fib-MACD Live Trader -- Groww Cloud")
     print("=" * 60)
     print(f"  Mode:         {'DRY RUN' if DRY_RUN else 'LIVE TRADING'}")
     print(f"  Stocks:       {len(PORTFOLIO)}")
@@ -2036,7 +2036,7 @@ def main():
     print(f"  Exit time:    {EXIT_TIME}")
     print("=" * 60)
     if not DRY_RUN:
-        print("  *** LIVE MODE — real orders will be placed! ***")
+        print("  *** LIVE MODE -- real orders will be placed! ***")
 
     stocks: dict[str, StockState] = {}
     for (symbol, direction, target_r) in PORTFOLIO:

@@ -668,32 +668,15 @@ class GrowwBroker:
                         )
                     continue
             if premarket_skipped:
-                logger.debug(
-                    f"get_candles_historical({symbol}): skipped "
-                    f"{premarket_skipped} pre-market None-OHLC entries"
-                )
+                logger.debug(f"get_candles_historical({symbol}): skipped {premarket_skipped} pre-market None-OHLC entries")
             if parse_errs and parse_errs == len(raw) - premarket_skipped:
-                logger.error(
-                    f"get_candles_historical({symbol}): ALL real candles "
-                    f"failed to parse — timestamp format may have changed"
-                )
+                logger.error(f"get_candles_historical({symbol}): ALL real candles failed to parse — timestamp format change?")
             if candles:
-                logger.debug(
-                    f"get_candles_historical({symbol}): {len(candles)} candles "
-                    f"[{candles[0]['datetime'][11:16]} – {candles[-1]['datetime'][11:16]}]"
-                )
+                logger.debug(f"get_candles_historical({symbol}): {len(candles)} candles [{candles[0]['datetime'][11:16]} – {candles[-1]['datetime'][11:16]}]")
             else:
-                # Log the raw response so we can see what Groww actually sent.
-                # Common causes: subscription expired, wrong groww_symbol prefix,
-                # date format issue, or response wrapped in payload.candles.
-                logger.warning(
-                    f"get_candles_historical({symbol}): 0 candles returned "
-                    f"(check date/time range or subscription)"
-                )
-                logger.warning(
-                    f"get_candles_historical({symbol}) raw resp type={type(resp).__name__}: "
-                    f"{str(resp)[:500]}"
-                )
+                # Common causes: subscription expired, wrong symbol prefix, date format, or response wrapped in payload.candles.
+                logger.warning(f"get_candles_historical({symbol}): 0 candles returned (check date range / subscription)")
+                logger.warning(f"get_candles_historical({symbol}) raw type={type(resp).__name__}: {str(resp)[:500]}")
             return candles
         except Exception as e:
             logger.error(f"get_candles_historical({symbol}) response parse: {e}")
@@ -738,11 +721,9 @@ class GrowwBroker:
         """Market order. Stable ref_id makes retries idempotent (Groww rejects duplicate refs)."""
         txn = _BUY if action.lower() == "buy" else _SELL
         ref = ref_id or _ref_id()
-        logger.info(
-            f"place_market_order → symbol={symbol} txn={txn} qty={qty} "
-            f"order_type={_MARKET} product={_MIS} exchange={_NSE} ref={ref}"
-        )
+        logger.info(f"place_market_order → {symbol} txn={txn} qty={qty} order_type={_MARKET} product={_MIS} ref={ref}")
         try:
+            # price intentionally omitted for MARKET — Groww docs say price/trigger_price shouldn't be sent.
             resp = self._g.place_order(
                 trading_symbol     = symbol,
                 quantity           = qty,
@@ -752,8 +733,6 @@ class GrowwBroker:
                 product            = _MIS,
                 order_type         = _MARKET,
                 transaction_type   = txn,
-                # price intentionally omitted for MARKET orders — Groww docs say
-                # price/trigger_price should not be sent for MARKET order type
                 order_reference_id = ref,
             )
             logger.debug(f"place_market_order({symbol}) raw response: {resp}")
@@ -771,21 +750,17 @@ class GrowwBroker:
     def place_oco_order(self, symbol: str, direction: str, qty: int,
                         sl_trigger: float, target_price: float,
                         ref_id: Optional[str] = None) -> OrderResult:
-        """OCO (one-cancels-other) covering SL_M + LIMIT target as one smart order.
-        SL_M with price=None (the Groww-docs format) avoids the limit-band NSE rejection.
-        direction = LONG/SHORT of the open position the OCO is protecting."""
+        """OCO smart order: SL_M (price=None) + LIMIT target.
+        net_position_quantity is SIGNED — +qty for LONG, -qty for SHORT. Sending
+        +qty for SHORT makes Groww fire SELL legs that ADD to the short."""
         exit_side  = _SELL if direction == "LONG" else _BUY
+        net_pos    = qty if direction == "LONG" else -qty
         sl_trig_r  = _round_tick(sl_trigger)
         tgt_r      = _round_tick(target_price)
         ref        = ref_id or _ref_id()
-        # Verbose request log so failures can be diagnosed from a single line.
-        logger.info(
-            f"place_oco_order REQUEST → symbol={symbol} direction={direction} "
-            f"exit_side={exit_side} qty={qty} "
-            f"sl_trigger={sl_trig_r:.2f} (SL_M) "
-            f"target={tgt_r:.2f} (LIMIT) "
-            f"product={_MIS} segment={_CASH} exchange={_NSE} duration={_DAY} ref={ref}"
-        )
+        ctx = (f"ref={ref} sl_trigger={sl_trig_r:.2f} target={tgt_r:.2f} "
+               f"qty={qty} net_pos={net_pos:+d} exit_side={exit_side}")
+        logger.info(f"place_oco_order REQUEST ({symbol} {direction}): {ctx}")
         try:
             resp = self._g.create_smart_order(
                 smart_order_type      = _OCO,
@@ -796,52 +771,28 @@ class GrowwBroker:
                 product_type          = _MIS,
                 exchange              = _NSE,
                 duration              = _DAY,
-                net_position_quantity = qty,
+                net_position_quantity = net_pos,
                 transaction_type      = exit_side,
-                target = {
-                    "trigger_price": f"{tgt_r:.2f}",
-                    "order_type":    _LIMIT,
-                    "price":         f"{tgt_r:.2f}",
-                },
-                stop_loss = {
-                    "trigger_price": f"{sl_trig_r:.2f}",
-                    "order_type":    _SL_M,
-                    "price":         None,
-                },
+                target = {"trigger_price": f"{tgt_r:.2f}", "order_type": _LIMIT,
+                          "price": f"{tgt_r:.2f}"},
+                stop_loss = {"trigger_price": f"{sl_trig_r:.2f}",
+                             "order_type": _SL_M, "price": None},
             )
-            # Always log full response at INFO (was DEBUG) — OCO is critical;
-            # we want the broker payload visible even if file logging is at INFO.
-            logger.info(f"place_oco_order RESPONSE ({symbol}) raw: {resp}")
-            # Smart-orders payload uses "smart_order_id" and "status" (not order_status).
-            # https://groww.in/trade-api/docs/curl/smart-orders
+            logger.info(f"place_oco_order RESPONSE ({symbol}): {resp}")
             oid    = _attr(resp, "smart_order_id") or ""
             status = _attr(resp, "status") or ""
             if oid:
-                logger.info(
-                    f"place_oco_order ACCEPTED ({symbol}): "
-                    f"smart_order_id={oid} status={status!r} ref={ref} "
-                    f"sl_trigger={sl_trig_r:.2f} target={tgt_r:.2f} qty={qty} "
-                    f"exit_side={exit_side}"
-                )
+                logger.info(f"place_oco_order ACCEPTED ({symbol}): smart_order_id={oid} status={status!r} | {ctx}")
                 return OrderResult(True, oid, status)
             msg = _attr(resp, "remark") or str(resp)
-            logger.error(
-                f"place_oco_order REJECTED ({symbol}): {msg} "
-                f"| ref={ref} sl_trigger={sl_trig_r:.2f} target={tgt_r:.2f} "
-                f"qty={qty} exit_side={exit_side}"
-            )
+            logger.error(f"place_oco_order REJECTED ({symbol}): {msg} | {ctx}")
             return OrderResult(False, "", msg)
         except Exception as e:
-            logger.error(
-                f"place_oco_order EXCEPTION ({symbol}): {e!r} "
-                f"| ref={ref} sl_trigger={sl_trig_r:.2f} target={tgt_r:.2f} "
-                f"qty={qty} exit_side={exit_side}"
-            )
+            logger.error(f"place_oco_order EXCEPTION ({symbol}): {e!r} | {ctx}")
             return OrderResult(False, "", str(e))
 
     def cancel_smart_order(self, smart_order_id: str) -> bool:
-        """Cancel an OCO/GTT smart order. On cancel, payload "status" → "CANCELLED".
-        https://groww.in/trade-api/docs/curl/smart-orders"""
+        """Cancel an OCO/GTT smart order. Returns True when payload status is CANCELLED."""
         if not smart_order_id:
             return False
         logger.info(f"cancel_smart_order: attempting to cancel {smart_order_id}")
@@ -917,10 +868,7 @@ class GrowwBroker:
             return []
 
     def get_avg_fill_price(self, order_id: str) -> float:
-        """Weighted-average execution price across all trades that filled this order.
-        Uses GET /order/trades/{id} — fields verified against
-        https://groww.in/trade-api/docs/curl/orders. Returns 0 if no trades
-        recorded yet or on API error (caller falls back to planned entry)."""
+        """Weighted-avg fill price via GET /order/trades/{id}. Returns 0 on no-trades / error."""
         try:
             resp = self._g.get_trade_list_for_order(
                 groww_order_id = order_id,
@@ -943,9 +891,7 @@ class GrowwBroker:
             return 0.0
 
     def get_order_status(self, order_id: str) -> tuple[str, int, float]:
-        """Canonical fill check — one non-trading call returns status,
-        filled_quantity AND average_fill_price (per Groww orders docs).
-        Returns ("UNKNOWN", 0, 0.0) on API error so caller can fall back."""
+        """One call: (status, filled_quantity, average_fill_price). ("UNKNOWN",0,0) on error."""
         try:
             resp   = self._g.get_order_status(groww_order_id=order_id, segment=_CASH)
             status = str(_attr(resp, "order_status") or "UNKNOWN").upper()
@@ -1031,6 +977,10 @@ class LiveTrader:
             # warmup_candles_1m is NOT persisted (would bloat state file).
             # Re-fetch it so MACD stays continuous after restart.
             self._rehydrate_after_restart()
+
+        # Second-line defense: scan broker for open MIS positions and mark
+        # those symbols DONE. Catches /tmp-wipe restart where state was lost.
+        self._mark_broker_positions_done()
 
         logger.info(
             f"Trading {len(self.states)} stocks | DRY_RUN={DRY_RUN} | "
@@ -1394,31 +1344,34 @@ class LiveTrader:
             state.trade = None
             return
 
-        # ── Snapshot pre-entry position — fallback fill check if status API fails ──
-        pre_qty = self.broker.get_live_qty(symbol)
-        if pre_qty is None:
-            logger.warning(f"{symbol} could not read pre-entry position — assuming 0")
-            pre_qty = 0
+        # ── Pre-entry idempotency guard ───────────────────────────────────────
+        # Retry the position read; if still None, ABORT (skipping a legit trade
+        # is far safer than firing blind and double-positioning). Catches
+        # pre-existing positions (manual trade, /tmp-wipe restart) and the
+        # crash-recovery race before IN_TRADE was checkpointed.
+        pre_qty = None
+        for retry in range(3):
+            pre_qty = self.broker.get_live_qty(symbol)
+            if pre_qty is not None:
+                break
+            logger.warning(f"{symbol} pre-entry position read FAILED ({retry + 1}/3) — retrying")
+            time.sleep(0.5)
 
-        # ── Idempotency guard: refuse to fire entry if a position already exists ──
-        # Protects against the crash-recovery race where the in-memory state
-        # transition to IN_TRADE (inside _fire_entry) hasn't been checkpointed
-        # to disk yet — a restart between place_market_order and _save_state
-        # would re-enter the state machine and double the position.
-        # Also catches a manual position in the symbol or stale broker state.
+        if pre_qty is None:
+            logger.error(f"{symbol} entry SKIPPED — position unreadable after 3 attempts (refusing blind fire)")
+            state.state = State.DONE
+            state.trade = None
+            self._save_state()
+            return
         if pre_qty != 0:
-            logger.error(
-                f"{symbol} entry SKIPPED — existing position detected "
-                f"(qty={pre_qty:+d}). Marking DONE to prevent double-fire."
-            )
+            logger.error(f"{symbol} entry SKIPPED — existing position (qty={pre_qty:+d}) detected")
             state.state = State.DONE
             state.trade = None
             self._save_state()
             return
 
-        # ── Place MARKET entry — guaranteed fill, accept slippage ─────────────
-        # (LIMIT entries missed fills when price ran past fib_entry. Actual fill
-        # price comes from the status poll; SL/target shift around it below.)
+        # ── Place MARKET entry — guaranteed fill, accept slippage. ────────────
+        # Actual fill price comes from status poll; SL/target shift around it below.
         entry_ref = f"E{symbol[:6]}{uuid.uuid4().hex[:6].upper()}"
         result    = self.broker.place_market_order(
             symbol, buy_sell, qty, ref_id=entry_ref,
@@ -1466,12 +1419,8 @@ class LiveTrader:
         logger.info(f"{symbol} fill price: avg_fill_px={avg_fill_px:.2f}")
 
         # ── Reconcile planned vs actual fill price ────────────────────────────
-        # Asymmetric handling:
-        #   Better fill (favourable slippage)  → keep planned fib SL and target,
-        #     let R:R expand for free.
-        #   Worse fill (adverse slippage)      → shift SL and target around fill,
-        #     preserving the intended risk_per_share and 1.5R reward.
-        # "Better" = LONG bought below fib_entry, or SHORT sold above fib_entry.
+        # Better fill (favourable slippage) → keep planned fib SL/target, R:R expands.
+        # Worse fill → shift around fill, preserving risk_ps and 1.5R.
         planned_entry = trade.entry_price
         planned_sl    = trade.stop_loss
         planned_tgt   = trade.target_price
@@ -1480,21 +1429,16 @@ class LiveTrader:
         if avg_fill_px > 0 and risk_ps > 0:
             if direction == "LONG":
                 better_fill       = avg_fill_px < planned_entry
-                planned_sl_intact = avg_fill_px > planned_sl   # SL still below fill
+                planned_sl_intact = avg_fill_px > planned_sl
             else:
                 better_fill       = avg_fill_px > planned_entry
-                planned_sl_intact = avg_fill_px < planned_sl   # SL still above fill
-
+                planned_sl_intact = avg_fill_px < planned_sl
             if better_fill and planned_sl_intact:
-                actual_risk   = abs(avg_fill_px - planned_sl)
-                actual_reward = abs(planned_tgt - avg_fill_px)
                 logger.info(
-                    f"{symbol} BETTER fill: planned={planned_entry:.2f} → actual={avg_fill_px:.2f} "
-                    f"| keeping planned sl={planned_sl:.2f} tgt={planned_tgt:.2f} "
-                    f"(risk={actual_risk:.2f}/sh reward={actual_reward:.2f}/sh from fill)"
+                    f"{symbol} BETTER fill: planned={planned_entry:.2f}→actual={avg_fill_px:.2f} "
+                    f"| keep sl={planned_sl:.2f} tgt={planned_tgt:.2f}"
                 )
                 trade.entry_price = avg_fill_px
-                # SL and target stay at planned fib levels
             else:
                 if direction == "LONG":
                     new_sl  = round(avg_fill_px - risk_ps, 2)
@@ -1503,32 +1447,26 @@ class LiveTrader:
                     new_sl  = round(avg_fill_px + risk_ps, 2)
                     new_tgt = round(avg_fill_px - risk_ps * target_r, 2)
                 logger.info(
-                    f"{symbol} WORSE fill: planned={planned_entry:.2f} → actual={avg_fill_px:.2f} "
-                    f"| sl {planned_sl:.2f}→{new_sl:.2f} tgt {planned_tgt:.2f}→{new_tgt:.2f} "
-                    f"(risk_ps={risk_ps:.2f} preserved)"
+                    f"{symbol} WORSE fill: planned={planned_entry:.2f}→actual={avg_fill_px:.2f} "
+                    f"| sl {planned_sl:.2f}→{new_sl:.2f} tgt {planned_tgt:.2f}→{new_tgt:.2f} (risk={risk_ps:.2f})"
                 )
                 trade.entry_price  = avg_fill_px
                 trade.stop_loss    = new_sl
                 trade.target_price = new_tgt
         else:
             logger.warning(
-                f"{symbol} no fill price available — using planned levels "
-                f"entry={planned_entry:.2f} sl={planned_sl:.2f} tgt={planned_tgt:.2f}"
+                f"{symbol} no fill price — planned entry={planned_entry:.2f} sl={planned_sl:.2f} tgt={planned_tgt:.2f}"
             )
 
-        # ── Place OCO (SL + target as one smart order) — 2-attempt retry ──────
-        # Native Groww OCO: SL_M trigger (no limit gap → no NSE band rejection)
-        # + LIMIT target. When one fires the other auto-cancels server-side.
-        # Attempt 2 uses a FRESH ref because Groww stores rejected refs.
+        # ── Place OCO (SL_M + LIMIT target). Attempt 2 uses a fresh ref since
+        # Groww stores rejected refs (and rejects duplicate retries).
         logger.info(
-            f"{symbol} OCO arming begin: direction={direction} qty={qty} "
-            f"entry={trade.entry_price:.2f} sl={trade.stop_loss:.2f} "
-            f"tgt={trade.target_price:.2f} entry_order_id={trade.entry_order_id}"
+            f"{symbol} OCO arming: {direction} qty={qty} entry={trade.entry_price:.2f} "
+            f"sl={trade.stop_loss:.2f} tgt={trade.target_price:.2f} entry_id={trade.entry_order_id}"
         )
         oco_ref = f"O{symbol[:6]}{uuid.uuid4().hex[:6].upper()}"
         for attempt in (1, 2):
             ref = oco_ref if attempt == 1 else f"O{symbol[:6]}{uuid.uuid4().hex[:6].upper()}"
-            logger.info(f"{symbol} OCO attempt {attempt}/2: ref={ref}")
             oco_res = self.broker.place_oco_order(
                 symbol, direction, qty,
                 sl_trigger   = trade.stop_loss,
@@ -1537,38 +1475,26 @@ class LiveTrader:
             )
             if oco_res.success:
                 trade.oco_order_id = oco_res.order_id
-                self._save_state()              # checkpoint: OCO placed
-                logger.info(
-                    f"{symbol} OCO ARMED ✓ (attempt {attempt}): "
-                    f"smart_order_id={oco_res.order_id} ref={ref} "
-                    f"sl={trade.stop_loss:.2f} tgt={trade.target_price:.2f} qty={qty}"
-                )
+                self._save_state()
+                logger.info(f"{symbol} OCO ARMED ✓ (attempt {attempt}): {oco_res.order_id} ref={ref}")
                 return
-            logger.warning(
-                f"{symbol} OCO attempt {attempt}/2 FAILED: {oco_res.message} "
-                f"(ref={ref}, will {'retry with fresh ref' if attempt == 1 else 'emergency-exit'})"
-            )
+            logger.warning(f"{symbol} OCO attempt {attempt}/2 FAILED: {oco_res.message} (ref={ref})")
             time.sleep(0.5)
 
-        # ── Last-resort: OCO failed twice → market-exit to avoid naked exposure ──
+        # Last-resort: OCO failed twice → market-exit to avoid naked exposure.
         exit_side = "sell" if direction == "LONG" else "buy"
         logger.error(
-            f"{symbol} OCO PLACEMENT FAILED TWICE — position is NAKED "
-            f"(entry_order_id={trade.entry_order_id}, qty={qty}, direction={direction}). "
-            f"Emergency-exiting now to close exposure."
+            f"{symbol} OCO PLACEMENT FAILED TWICE — emergency-exiting "
+            f"(entry_id={trade.entry_order_id} qty={qty} {direction})"
         )
         emer_ref      = f"X{symbol[:6]}{uuid.uuid4().hex[:6].upper()}"
         emergency_res = self.broker.place_market_order(symbol, exit_side, qty, ref_id=emer_ref)
         if emergency_res.success:
-            logger.warning(
-                f"{symbol} emergency exit placed: order_id={emergency_res.order_id} "
-                f"ref={emer_ref} side={exit_side} qty={qty} — position should be flat"
-            )
+            logger.warning(f"{symbol} emergency exit placed: {emergency_res.order_id} side={exit_side} qty={qty}")
         else:
             logger.error(
                 f"{symbol} EMERGENCY EXIT ALSO FAILED — MANUAL ACTION REQUIRED! "
-                f"emer_ref={emer_ref} side={exit_side} qty={qty} | "
-                f"({emergency_res.message})"
+                f"side={exit_side} qty={qty} | {emergency_res.message}"
             )
         state.state = State.DONE
         self._save_state()
@@ -1577,11 +1503,9 @@ class LiveTrader:
                        expected_qty: int, pre_qty: int,
                        order_id: str,
                        max_wait_s: float) -> tuple[int, float]:
-        """Poll get_order_status (primary — fastest, terminal-state aware,
-        returns filled_quantity + average_fill_price in one call). Falls back
-        to position delta only if the status API keeps erroring. On timeout
-        cancel the remainder, then recheck BOTH status and position so a fill
-        landing during the cancel race isn't lost.
+        """Poll get_order_status (terminal-aware) until fill / dead state / timeout.
+        Position delta is fallback when status keeps erroring. On timeout cancel +
+        recheck status AND position so a cancel-race fill isn't lost.
         Returns (filled_qty, avg_fill_price); avg=0.0 means unknown."""
         deadline      = time.time() + max_wait_s
         status_errors = 0
@@ -1594,28 +1518,21 @@ class LiveTrader:
                 logger.info(f"{symbol} fill confirmed: {status} filled={f} avg={avg_px:.2f}")
                 return min(f, expected_qty), avg_px
             if status in _DEAD_STATES:
-                logger.warning(
-                    f"{symbol} order {order_id} terminal: {status} (filled={filled}) — no wait needed"
-                )
+                logger.warning(f"{symbol} order {order_id} terminal: {status} (filled={filled})")
                 return min(filled, expected_qty), avg_px
             if status == "UNKNOWN":
                 status_errors += 1
                 if status_errors >= 3:
-                    # Status API unusable — position delta as truth source
                     cur = self.broker.get_live_qty(symbol)
                     if cur is not None:
                         delta = (cur - pre_qty) if direction == "LONG" else (pre_qty - cur)
                         if delta >= expected_qty:
                             logger.info(f"{symbol} fill confirmed via position delta: {delta}")
                             return expected_qty, 0.0
-            # NEW / ACKED / APPROVED / OPEN / TRIGGER_PENDING → keep polling
             time.sleep(1.0)
 
-        # Timeout — cancel any unfilled remainder, then take authoritative reads.
-        logger.info(
-            f"{symbol} no terminal status within {max_wait_s}s "
-            f"(last={last_status!r}) — cancelling and re-checking"
-        )
+        # Timeout — cancel, recheck status + position (cancel-race safe).
+        logger.info(f"{symbol} no terminal status within {max_wait_s}s (last={last_status!r}) — cancelling")
         self.broker.cancel_order(order_id)
         time.sleep(1.0)
         status, filled, avg_px = self.broker.get_order_status(order_id)
@@ -1980,6 +1897,32 @@ class LiveTrader:
             f"or_built={self._or_built} trades_today={self._trades_today}"
         )
         return True
+
+    def _mark_broker_positions_done(self):
+        """Mark DONE any symbol that already has an open broker position.
+        Guards against /tmp wipe + state-file loss, mid-flow crashes, and
+        manual positions. DRY_RUN skipped (no real positions)."""
+        if DRY_RUN:
+            return
+        open_positions = self.broker.get_all_mis_positions()
+        if not open_positions:
+            logger.info("_mark_broker_positions_done: no open MIS positions at startup")
+            return
+        marked = 0
+        for pos in open_positions:
+            sym = pos["symbol"]
+            if sym not in self.states:
+                logger.info(f"_mark_broker_positions_done: {sym} qty={pos['net_qty']:+d} not in portfolio — ignoring")
+                continue
+            s = self.states[sym]
+            if s.state == State.IN_TRADE:
+                continue   # _reconcile_with_broker already handled this case
+            logger.warning(f"{sym}: broker has OPEN position qty={pos['net_qty']:+d} but state={s.state.name} — DONE")
+            s.state = State.DONE
+            marked += 1
+        if marked:
+            logger.warning(f"_mark_broker_positions_done: marked {marked} stock(s) DONE")
+            self._save_state()
 
     def _reconcile_with_broker(self):
         """Reconcile in-memory IN_TRADE vs broker: flat→DONE, sign-mismatch→DONE, qty-diff→adopt broker."""

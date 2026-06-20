@@ -28,7 +28,8 @@ MACD_FAST        = 12
 MACD_SLOW        = 26
 MACD_SIGNAL      = 9
 TARGET_R         = 1.5        # Reward:Risk ratio for target
-EXIT_TIME        = "15:14"    # Force-exit all positions before close
+NO_NEW_ENTRY_TIME = "14:30"   # After this, state machine stops progressing toward new entries
+EXIT_TIME        = "15:00"    # Force-exit all IN_TRADE positions at this time
 MAX_WAIT_BARS    = 60         # Max 1-min bars to wait for fib touch after swing
 
 DRY_RUN = True             # log signals only when True
@@ -101,8 +102,8 @@ logger = logging.getLogger("GrowwFibMACD")
 
 # ── Market hours ──────────────────────────────────────────────────────────────
 MARKET_OPEN   = "09:15"
-MARKET_CLOSE  = "15:18"   # emergency exit fires here — before broker auto-squares MIS at 15:20
-                          # (state machine TIME exits already fire at EXIT_TIME=15:14)
+MARKET_CLOSE  = "15:18"   # emergency_exit_all fires here as safety net before broker auto-squares MIS at 15:20
+                          # (state machine force-exits at EXIT_TIME=15:00, this catches any stragglers)
 LTP_POLL_SECS = 15   # poll LTP every 15 s → 4 samples per 1-min candle
 
 _oe_h, _oe_m = divmod(9 * 60 + 15 + OR_MINUTES, 60)
@@ -241,7 +242,7 @@ class StockState:
         return self._handle_breakout(candle, t)
 
     def _handle_breakout(self, candle, t):
-        if t >= EXIT_TIME:
+        if t >= NO_NEW_ENTRY_TIME:
             self.state = State.DONE
             return None
 
@@ -265,7 +266,7 @@ class StockState:
         return None
 
     def _handle_swing(self, candle, t):
-        if t >= EXIT_TIME:
+        if t >= NO_NEW_ENTRY_TIME:
             self.state = State.DONE
             return None
 
@@ -293,7 +294,7 @@ class StockState:
         return None
 
     def _handle_fib(self, candle, t):
-        if t >= EXIT_TIME:
+        if t >= NO_NEW_ENTRY_TIME:
             self.state = State.DONE
             return None
 
@@ -323,7 +324,7 @@ class StockState:
         return None
 
     def _handle_entry(self, candle, t):
-        if t >= EXIT_TIME:
+        if t >= NO_NEW_ENTRY_TIME:
             self.state = State.DONE
             return None
 
@@ -2031,6 +2032,7 @@ def main():
     print(f"  OR duration:  {OR_MINUTES} min")
     print(f"  Fib entry:    {FIB_ENTRY_PCT*100:.1f}%")
     print(f"  MACD:         {MACD_CONDITION}")
+    print(f"  No new entry: {NO_NEW_ENTRY_TIME}")
     print(f"  Exit time:    {EXIT_TIME}")
     print("=" * 60)
     if not DRY_RUN:

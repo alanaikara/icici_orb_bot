@@ -206,10 +206,17 @@ class StockState:
         self.setup:           Optional[TradeSetup] = None
         self.trade:           Optional[OpenTrade]  = None
         self.macd_5m:         pd.DataFrame = pd.DataFrame()
+        self.no_trade_reason: str = ""   # set when state=DONE without a trade
         # Pre-today 1-min candles fetched at startup. Prepended to every
         # MACD computation so EMA(26) is continuous across day boundaries --
         # matches backtest behaviour where MACD spans the full history.
         self.warmup_candles_1m: list[dict] = []
+
+    def _done(self, reason: str):
+        """Mark state DONE and record the reason if no trade was placed."""
+        self.state = State.DONE
+        if self.trade is None and not self.no_trade_reason:
+            self.no_trade_reason = reason
 
     def on_candle(self, candle: dict) -> Optional[str]:
         """Feed one 1-min candle. Returns 'enter_long'/'enter_short'/'exit_trade'/None."""
@@ -232,7 +239,7 @@ class StockState:
 
         or_candles = [c for c in self.candles_1m if c["datetime"][11:16] < OR_END]
         if len(or_candles) < 2:
-            self.state = State.DONE
+            self._done("OR build failed (<2 candles)")
             return None
 
         self.or_high = max(c["high"] for c in or_candles)
@@ -243,7 +250,7 @@ class StockState:
 
     def _handle_breakout(self, candle, t):
         if t >= NO_NEW_ENTRY_TIME:
-            self.state = State.DONE
+            self._done(f"no breakout by {NO_NEW_ENTRY_TIME}")
             return None
 
         allow_long  = self.cfg.direction in ("long_only", "both")
@@ -267,13 +274,13 @@ class StockState:
 
     def _handle_swing(self, candle, t):
         if t >= NO_NEW_ENTRY_TIME:
-            self.state = State.DONE
+            self._done(f"swing in progress past {NO_NEW_ENTRY_TIME}")
             return None
 
         self.swing_bars += 1
         if self.swing_bars > MAX_WAIT_BARS:
             logger.info(f"{self.symbol} swing timeout -- skipping today")
-            self.state = State.DONE
+            self._done(f"swing timeout after {MAX_WAIT_BARS} bars")
             return None
 
         if self.breakout_dir == "LONG":
@@ -295,7 +302,7 @@ class StockState:
 
     def _handle_fib(self, candle, t):
         if t >= NO_NEW_ENTRY_TIME:
-            self.state = State.DONE
+            self._done(f"fib not touched by {NO_NEW_ENTRY_TIME}")
             return None
 
         s = self.setup
@@ -303,11 +310,11 @@ class StockState:
         # Invalidation -- price blew through 78.6% stop zone
         if self.breakout_dir == "LONG" and candle["close"] <= s.stop_loss:
             logger.info(f"{self.symbol} LONG invalidated: close={candle['close']:.2f} <= sl_zone={s.stop_loss:.2f}")
-            self.state = State.DONE
+            self._done("setup invalidated (78.6% breach)")
             return None
         if self.breakout_dir == "SHORT" and candle["close"] >= s.stop_loss:
             logger.info(f"{self.symbol} SHORT invalidated: close={candle['close']:.2f} >= sl_zone={s.stop_loss:.2f}")
-            self.state = State.DONE
+            self._done("setup invalidated (78.6% breach)")
             return None
 
         # Same-candle entry possible: a strong bounce wicks fib + closes back through.
@@ -325,16 +332,16 @@ class StockState:
 
     def _handle_entry(self, candle, t):
         if t >= NO_NEW_ENTRY_TIME:
-            self.state = State.DONE
+            self._done(f"entry not fired by {NO_NEW_ENTRY_TIME}")
             return None
 
         s = self.setup
 
         if self.breakout_dir == "LONG" and candle["close"] <= s.stop_loss:
-            self.state = State.DONE
+            self._done("setup invalidated (78.6% breach during entry wait)")
             return None
         if self.breakout_dir == "SHORT" and candle["close"] >= s.stop_loss:
-            self.state = State.DONE
+            self._done("setup invalidated (78.6% breach during entry wait)")
             return None
 
         # Entry: candle CLOSES back through fib level with MACD confirmation
@@ -387,7 +394,7 @@ class StockState:
             anchor_hi = self.swing_value
             rng       = anchor_hi - anchor_lo
             if rng <= 0:
-                self.state = State.DONE
+                self._done("invalid swing range (LONG, rng<=0)")
                 return
             fib_entry = anchor_hi - FIB_ENTRY_PCT * rng
             fib_786   = anchor_hi - FIB_786 * rng
@@ -397,7 +404,7 @@ class StockState:
             anchor_lo = self.swing_value
             rng       = anchor_hi - anchor_lo
             if rng <= 0:
-                self.state = State.DONE
+                self._done("invalid swing range (SHORT, rng<=0)")
                 return
             fib_entry = anchor_lo + FIB_ENTRY_PCT * rng
             fib_786   = anchor_lo + FIB_786 * rng
@@ -436,7 +443,7 @@ class StockState:
         )
         if qty <= 0:
             logger.info(f"{self.symbol} qty=0 (risk_ps={risk_ps:.2f} too large or entry=0) -- skipping entry")
-            self.state = State.DONE
+            self._done(f"qty=0 (risk_ps={risk_ps:.2f} too wide)")
             return None
 
         target = (
@@ -979,10 +986,6 @@ class LiveTrader:
             # Re-fetch it so MACD stays continuous after restart.
             self._rehydrate_after_restart()
 
-        # Second-line defense: scan broker for open MIS positions and mark
-        # those symbols DONE. Catches /tmp-wipe restart where state was lost.
-        self._mark_broker_positions_done()
-
         logger.info(
             f"Trading {len(self.states)} stocks | DRY_RUN={DRY_RUN} | "
             f"max_trades={MAX_TRADES_PER_DAY} | min_macd_bars={MIN_MACD_BARS} | "
@@ -1326,11 +1329,9 @@ class LiveTrader:
 
         # -- Pre-flight: daily loss / trade-count circuit breaker --------------
         if self._trades_today >= MAX_TRADES_PER_DAY:
-            logger.warning(
-                f"{symbol} entry SKIPPED -- MAX_TRADES_PER_DAY ({MAX_TRADES_PER_DAY}) reached"
-            )
-            state.state = State.DONE
+            logger.warning(f"{symbol} entry SKIPPED -- MAX_TRADES_PER_DAY ({MAX_TRADES_PER_DAY}) reached")
             state.trade = None
+            state._done(f"MAX_TRADES_PER_DAY={MAX_TRADES_PER_DAY} reached")
             return
 
         # -- Pre-flight: margin check ------------------------------------------
@@ -1341,35 +1342,16 @@ class LiveTrader:
                 f"{symbol} entry SKIPPED -- insufficient margin "
                 f"(need ~=Rs{required_margin:.0f}, have Rs{avail_cash:.0f})"
             )
-            state.state = State.DONE
             state.trade = None
+            state._done(f"insufficient margin (need Rs{required_margin:.0f}, have Rs{avail_cash:.0f})")
             return
 
-        # -- Pre-entry idempotency guard ---------------------------------------
-        # Retry the position read; if still None, ABORT (skipping a legit trade
-        # is far safer than firing blind and double-positioning). Catches
-        # pre-existing positions (manual trade, /tmp-wipe restart) and the
-        # crash-recovery race before IN_TRADE was checkpointed.
-        pre_qty = None
-        for retry in range(3):
-            pre_qty = self.broker.get_live_qty(symbol)
-            if pre_qty is not None:
-                break
-            logger.warning(f"{symbol} pre-entry position read FAILED ({retry + 1}/3) -- retrying")
-            time.sleep(0.5)
-
+        # Snapshot pre-entry position for the fill-confirmation fallback inside
+        # _wait_for_fill (position-delta when status API misbehaves).
+        pre_qty = self.broker.get_live_qty(symbol)
         if pre_qty is None:
-            logger.error(f"{symbol} entry SKIPPED -- position unreadable after 3 attempts (refusing blind fire)")
-            state.state = State.DONE
-            state.trade = None
-            self._save_state()
-            return
-        if pre_qty != 0:
-            logger.error(f"{symbol} entry SKIPPED -- existing position (qty={pre_qty:+d}) detected")
-            state.state = State.DONE
-            state.trade = None
-            self._save_state()
-            return
+            logger.warning(f"{symbol} could not read pre-entry position -- assuming 0")
+            pre_qty = 0
 
         # -- Place MARKET entry -- guaranteed fill, accept slippage. ------------
         # Actual fill price comes from status poll; SL/target shift around it below.
@@ -1379,8 +1361,8 @@ class LiveTrader:
         )
         if not result.success:
             logger.error(f"{symbol} entry FAILED: {result.message}")
-            state.state = State.DONE
             state.trade = None
+            state._done(f"entry order rejected: {result.message[:80]}")
             return
         trade.entry_order_id = result.order_id
         self._trades_today  += 1
@@ -1399,12 +1381,9 @@ class LiveTrader:
             max_wait_s=ENTRY_FILL_WAIT_S,
         )
         if filled_qty == 0:
-            logger.warning(
-                f"{symbol} MARKET entry did not fill within "
-                f"{ENTRY_FILL_WAIT_S}s -- abandoning trade"
-            )
-            state.state = State.DONE
+            logger.warning(f"{symbol} MARKET entry did not fill within {ENTRY_FILL_WAIT_S}s -- abandoning")
             state.trade = None
+            state._done(f"entry did not fill in {ENTRY_FILL_WAIT_S}s")
             self._save_state()
             return
         if filled_qty < qty:
@@ -1707,15 +1686,21 @@ class LiveTrader:
         t_str    = datetime.now().strftime("%H:%M:%S")
         by_state: dict[str, list] = {}
         for s in self.states.values():
-            by_state.setdefault(s.state.name, []).append(s.symbol)
+            # Split DONE into TRADED (we entered today) vs NO_TRADE (setup
+            # never materialised, got blocked, or invalidated before entry).
+            if s.state == State.DONE:
+                bucket = "TRADED" if s.trade is not None else "NO_TRADE"
+            else:
+                bucket = s.state.name
+            by_state.setdefault(bucket, []).append(s.symbol)
 
-        # Build summary line: each state -> count (and symbols for short lists)
+        # Build summary line: each bucket -> count (with symbols for short lists)
         parts = []
-        state_order = [
+        order = [
             "WAITING_OR", "WAITING_BREAKOUT", "WAITING_SWING",
-            "WAITING_FIB", "WAITING_ENTRY", "IN_TRADE", "DONE"
+            "WAITING_FIB", "WAITING_ENTRY", "IN_TRADE", "TRADED", "NO_TRADE",
         ]
-        for name in state_order:
+        for name in order:
             syms = by_state.get(name, [])
             if not syms:
                 continue
@@ -1799,6 +1784,7 @@ class LiveTrader:
                 "swing_peak":   s.swing_peak,
                 "swing_value":  s.swing_value,
                 "swing_bars":   s.swing_bars,
+                "no_trade_reason": s.no_trade_reason,
             }
             if s.setup is not None:
                 entry["setup"] = {
@@ -1867,6 +1853,7 @@ class LiveTrader:
                 s.swing_peak   = float(entry.get("swing_peak",  0))
                 s.swing_value  = float(entry.get("swing_value", 0))
                 s.swing_bars   = int(entry.get("swing_bars",   0))
+                s.no_trade_reason = str(entry.get("no_trade_reason", ""))
                 if entry.get("setup"):
                     su = entry["setup"]
                     s.setup = TradeSetup(
@@ -1898,32 +1885,6 @@ class LiveTrader:
             f"or_built={self._or_built} trades_today={self._trades_today}"
         )
         return True
-
-    def _mark_broker_positions_done(self):
-        """Mark DONE any symbol that already has an open broker position.
-        Guards against /tmp wipe + state-file loss, mid-flow crashes, and
-        manual positions. DRY_RUN skipped (no real positions)."""
-        if DRY_RUN:
-            return
-        open_positions = self.broker.get_all_mis_positions()
-        if not open_positions:
-            logger.info("_mark_broker_positions_done: no open MIS positions at startup")
-            return
-        marked = 0
-        for pos in open_positions:
-            sym = pos["symbol"]
-            if sym not in self.states:
-                logger.info(f"_mark_broker_positions_done: {sym} qty={pos['net_qty']:+d} not in portfolio -- ignoring")
-                continue
-            s = self.states[sym]
-            if s.state == State.IN_TRADE:
-                continue   # _reconcile_with_broker already handled this case
-            logger.warning(f"{sym}: broker has OPEN position qty={pos['net_qty']:+d} but state={s.state.name} -- DONE")
-            s.state = State.DONE
-            marked += 1
-        if marked:
-            logger.warning(f"_mark_broker_positions_done: marked {marked} stock(s) DONE")
-            self._save_state()
 
     def _reconcile_with_broker(self):
         """Reconcile in-memory IN_TRADE vs broker: flat->DONE, sign-mismatch->DONE, qty-diff->adopt broker."""
@@ -2005,16 +1966,24 @@ class LiveTrader:
         logger.info("=" * 60)
         logger.info("END OF DAY SUMMARY")
         logger.info("=" * 60)
-        for s in self.states.values():
-            if s.trade:
-                t = s.trade
-                logger.info(
-                    f"  {s.symbol}: {t.direction} {t.quantity}x @ "
-                    f"{t.entry_price:.2f} | {s.state.name}"
-                )
-        no_trade = [s.symbol for s in self.states.values()
+        traded = [s for s in self.states.values() if s.trade]
+        logger.info(f"TRADED ({len(traded)}):")
+        for s in traded:
+            t = s.trade
+            logger.info(
+                f"  {s.symbol}: {t.direction} {t.quantity}x @ {t.entry_price:.2f} | "
+                f"sl={t.stop_loss:.2f} tgt={t.target_price:.2f} | final_state={s.state.name}"
+            )
+        no_trade = [s for s in self.states.values()
                     if s.trade is None and s.state == State.DONE]
-        logger.info(f"No trade today: {no_trade}")
+        logger.info(f"NO_TRADE ({len(no_trade)}):")
+        for s in no_trade:
+            reason = s.no_trade_reason or "unknown"
+            logger.info(f"  {s.symbol}: {reason}")
+        still_active = [s.symbol for s in self.states.values()
+                        if s.state not in (State.DONE,)]
+        if still_active:
+            logger.info(f"Still active at shutdown: {still_active}")
 
 
 # ===============================================================================

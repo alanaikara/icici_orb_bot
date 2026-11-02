@@ -1,0 +1,238 @@
+<title>Global Options MCP</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column, with wide figures (diagram, chart) that break out to a broader track. */
+:root {
+  --bg: #f2f4f7;
+  --panel: #ffffff;
+  --ink: #142030;
+  --muted: #56657a;
+  --line: #d5dce6;
+  --accent: #0b6e8a;
+  --accent-soft: #dcEEF3;
+  --risk: #b8650a;
+  --risk-soft: #f7ead8;
+  --good: #2c7a4b;
+  --display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1621; --panel: #172131; --ink: #e4eaf2; --muted: #9aa8bb; --line: #2a3a50;
+    --accent: #4fb3cf; --accent-soft: #163846; --risk: #e3a04f; --risk-soft: #3a2a16; --good: #6cc18f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1621; --panel: #172131; --ink: #e4eaf2; --muted: #9aa8bb; --line: #2a3a50;
+  --accent: #4fb3cf; --accent-soft: #163846; --risk: #e3a04f; --risk-soft: #3a2a16; --good: #6cc18f;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font: 16px/1.6 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 64px;
+}
+.wrap { max-width: 980px; margin: 0 auto; display: grid; gap: 56px; }
+.col { max-width: 68ch; }
+h1, h2, h3 { font-family: var(--display); font-stretch: 80%; line-height: 1.1; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(2.2rem, 6vw, 3.6rem); font-weight: 800; letter-spacing: -0.01em; }
+h2 { font-size: 1.75rem; font-weight: 700; }
+h3 { font-size: 1.1rem; font-weight: 700; font-stretch: 90%; }
+p { margin: 0; }
+.eyebrow { font: 500 0.78rem/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+.lede { font-size: 1.15rem; color: var(--muted); }
+section { display: grid; gap: 18px; }
+.figure { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 20px; overflow-x: auto; }
+.figure svg { display: block; width: 100%; min-width: 620px; height: auto; }
+.cap { font-size: 0.85rem; color: var(--muted); }
+code, pre { font-family: var(--mono); font-size: 0.86rem; }
+pre { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; overflow-x: auto; margin: 0; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; counter-reset: s; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 2.2rem 1fr; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.steps li::before { content: counter(s); font: 600 0.95rem/1.6 var(--mono); color: var(--accent); }
+.steps b { font-family: var(--mono); font-weight: 500; font-size: 0.9rem; }
+.gates { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.gate { background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--risk); padding: 14px; border-radius: 4px; display: grid; gap: 6px; align-content: start; }
+.gate .k { font: 500 0.75rem/1 var(--mono); color: var(--risk); letter-spacing: 0.08em; text-transform: uppercase; }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font: 600 0.75rem/1.2 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+td.num, th.num { text-align: right; }
+tr.top td { background: var(--accent-soft); }
+.pill { display: inline-block; font: 500 0.72rem/1 var(--mono); padding: 4px 7px; border-radius: 99px; }
+.pill.ok { background: var(--accent-soft); color: var(--accent); }
+.pill.bad { background: var(--risk-soft); color: var(--risk); }
+.note { border-left: 3px solid var(--risk); padding: 4px 0 4px 14px; color: var(--muted); }
+/* SVG theming */
+.s-box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+.s-hub { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+.s-guard { fill: var(--risk-soft); stroke: var(--risk); stroke-width: 1.5; }
+.s-t { fill: var(--ink); font: 600 15px var(--body); }
+.s-s { fill: var(--muted); font: 400 12px var(--mono); }
+.s-a { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+.s-ar { fill: var(--muted); }
+.s-acc { fill: var(--accent); font: 600 12px var(--mono); }
+.s-rk { fill: var(--risk); font: 600 12px var(--mono); }
+.c-grid { stroke: var(--line); stroke-width: 1; }
+.c-zero { stroke: var(--muted); stroke-width: 1.2; }
+.c-lab { fill: var(--muted); font: 400 11px var(--mono); }
+.c-call { stroke: var(--accent); stroke-width: 2.5; fill: none; }
+.c-spr { stroke: var(--risk); stroke-width: 2.5; fill: none; stroke-dasharray: 7 4; }
+.c-dot-call { fill: var(--accent); }
+.c-dot-spr { fill: var(--risk); }
+.legend { display: flex; flex-wrap: wrap; gap: 18px; font-size: 0.85rem; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 22px; height: 0; border-top: 3px solid var(--accent); vertical-align: middle; margin-right: 6px; }
+.legend span.spr::before { border-top: 3px dashed var(--risk); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+
+<header class="col" style="display:grid;gap:16px">
+  <div class="eyebrow">MCP server · Zerodha · global macro</div>
+  <h1>Global Options MCP</h1>
+  <p class="lede">This server connects Claude to your Zerodha account, to global market data and to option maths. Use it to research long-dated option positions on Indian markets. It is a research tool. It does not give financial advice.</p>
+</header>
+
+<section>
+  <div class="eyebrow">Architecture</div>
+  <h2>How the parts connect</h2>
+  <div class="figure" role="img" aria-label="Claude talks to the Global Options MCP server over MCP. The server calls Zerodha Kite Connect and Yahoo Finance, and runs option maths and order guards locally.">
+    <svg viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="s-ar"/></marker></defs>
+      <!-- Claude -->
+      <rect x="20" y="130" width="170" height="100" rx="8" class="s-box"/>
+      <text x="105" y="170" text-anchor="middle" class="s-t">Claude</text>
+      <text x="105" y="192" text-anchor="middle" class="s-s">Desktop / Code</text>
+      <text x="105" y="210" text-anchor="middle" class="s-s">you ask questions</text>
+      <line x1="190" y1="180" x2="290" y2="180" class="s-a" marker-end="url(#ah)" marker-start="url(#ah)"/>
+      <text x="240" y="170" text-anchor="middle" class="s-acc">MCP</text>
+      <text x="240" y="200" text-anchor="middle" class="s-s">stdio/http</text>
+      <!-- Hub -->
+      <rect x="290" y="40" width="320" height="280" rx="10" class="s-hub"/>
+      <text x="450" y="70" text-anchor="middle" class="s-t">global_options_mcp.server</text>
+      <rect x="310" y="88" width="280" height="44" rx="5" class="s-box"/>
+      <text x="320" y="108" class="s-t" style="font-size:13px">global_data.py</text>
+      <text x="320" y="124" class="s-s">snapshot · stats · HV</text>
+      <rect x="310" y="140" width="280" height="44" rx="5" class="s-box"/>
+      <text x="320" y="160" class="s-t" style="font-size:13px">analysis.py</text>
+      <text x="320" y="176" class="s-s">macro regime · strike ranking</text>
+      <rect x="310" y="192" width="280" height="44" rx="5" class="s-box"/>
+      <text x="320" y="212" class="s-t" style="font-size:13px">options_math.py</text>
+      <text x="320" y="228" class="s-s">Black-Scholes · Greeks · IV · payoff</text>
+      <rect x="310" y="244" width="280" height="60" rx="5" class="s-guard"/>
+      <text x="320" y="264" class="s-t" style="font-size:13px">kite_client.py</text>
+      <text x="320" y="281" class="s-s">chain · positions · orders</text>
+      <text x="320" y="296" class="s-rk">guards: preview · confirm · caps</text>
+      <!-- Externals -->
+      <line x1="610" y1="110" x2="700" y2="110" class="s-a" marker-end="url(#ah)"/>
+      <rect x="700" y="60" width="180" height="100" rx="8" class="s-box"/>
+      <text x="790" y="98" text-anchor="middle" class="s-t">Yahoo Finance</text>
+      <text x="790" y="120" text-anchor="middle" class="s-s">35 global symbols</text>
+      <text x="790" y="138" text-anchor="middle" class="s-s">no API key</text>
+      <line x1="610" y1="270" x2="700" y2="250" class="s-a" marker-end="url(#ah)" marker-start="url(#ah)"/>
+      <rect x="700" y="200" width="180" height="100" rx="8" class="s-box"/>
+      <text x="790" y="238" text-anchor="middle" class="s-t">Zerodha</text>
+      <text x="790" y="260" text-anchor="middle" class="s-s">Kite Connect API</text>
+      <text x="790" y="278" text-anchor="middle" class="s-s">NFO options · NRML</text>
+    </svg>
+  </div>
+  <p class="cap">Option maths and order guards run on your computer. Only data requests and approved orders leave it.</p>
+</section>
+
+<section class="col">
+  <div class="eyebrow">Workflow</div>
+  <h2>From global view to a position</h2>
+  <ol class="steps">
+    <li><div><b>macro_regime_score</b> · Score the global backdrop. The tool checks trends in Nifty, S&amp;P 500 and copper, plus VIX, the dollar, USD/INR, Brent and the US 10-year yield.</div></li>
+    <li><div><b>global_market_snapshot</b> · See each region and asset class: 1-day to 1-year change, distance from the 200-day average, volatility.</div></li>
+    <li><div><b>kite_option_expiries</b> · List the long expiries that NFO has today. Use <code>min_days=180</code>.</div></li>
+    <li><div><b>kite_option_chain</b> · Get the live chain: bid, ask, spread, open interest, implied volatility and Greeks.</div></li>
+    <li><div><b>long_option_ideas</b> · Rank strikes for your view. The tool removes illiquid legs and uses the ask price.</div></li>
+    <li><div><b>strategy_payoff</b> · Check the maximum loss and the breakeven of the final structure.</div></li>
+    <li><div><b>kite_place_option_order</b> · Preview the order. Send it only after you approve it.</div></li>
+  </ol>
+</section>
+
+<section>
+  <div class="eyebrow">Order safety</div>
+  <h2>Five gates before an order goes to Zerodha</h2>
+  <div class="gates">
+    <div class="gate"><span class="k">Gate 1</span><h3>Preview by default</h3><p class="cap">If <code>LIVE_ORDERS</code> is not <code>true</code>, the tool sends nothing.</p></div>
+    <div class="gate"><span class="k">Gate 2</span><h3>Human confirm</h3><p class="cap">Live orders also need <code>confirm=true</code>. Claude must ask you.</p></div>
+    <div class="gate"><span class="k">Gate 3</span><h3>Limit + NRML only</h3><p class="cap">No market orders. Far expiries have wide spreads.</p></div>
+    <div class="gate"><span class="k">Gate 4</span><h3>Size caps</h3><p class="cap"><code>MAX_LOTS_PER_ORDER</code> and <code>MAX_ORDER_PREMIUM</code>.</p></div>
+    <div class="gate"><span class="k">Gate 5</span><h3>No naked selling</h3><p class="cap">SELL can only close a long that you hold.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Strike ranking · example</div>
+  <h2>Which strike to buy for a 1-year bullish view</h2>
+  <p class="col">Example inputs: NIFTY spot 24,000, 365 days, IV 15 %, 1-year historical vol 16 %, rate 6.5 %. The numbers come from the model in <code>analysis.py</code>. They are not live prices.</p>
+  <div class="tbl figure" style="padding:6px 12px">
+    <table>
+      <thead><tr><th>Strike</th><th class="num">Premium</th><th class="num">Delta</th><th class="num">Decay / month</th><th class="num">Breakeven (SD)</th><th class="num">Score</th><th>Comment</th></tr></thead>
+      <tbody>
+        <tr class="top"><td>23,000 CE</td><td class="num">2,920</td><td class="num">0.79</td><td class="num">4.4 %</td><td class="num">0.53</td><td class="num">5.0</td><td><span class="pill ok">stock-replacement zone</span></td></tr>
+        <tr class="top"><td>24,000 CE</td><td class="num">2,273</td><td class="num">0.69</td><td class="num">5.7 %</td><td class="num">0.63</td><td class="num">5.0</td><td><span class="pill ok">ATM, more leverage</span></td></tr>
+        <tr><td>22,000 CE</td><td class="num">3,655</td><td class="num">0.86</td><td class="num">3.4 %</td><td class="num">0.46</td><td class="num">4.0</td><td>deep ITM, low leverage</td></tr>
+        <tr><td>25,000 CE</td><td class="num">1,723</td><td class="num">0.59</td><td class="num">7.2 %</td><td class="num">0.76</td><td class="num">3.0</td><td>faster decay</td></tr>
+        <tr><td>26,000 CE</td><td class="num">1,271</td><td class="num">0.49</td><td class="num">9.1 %</td><td class="num">0.91</td><td class="num">1.5</td><td>high decay</td></tr>
+        <tr><td>28,000 CE</td><td class="num">640</td><td class="num">0.30</td><td class="num">13.6 %</td><td class="num">1.29</td><td class="num">−3.0</td><td><span class="pill bad">OTM lottery zone</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Payoff at expiry · per unit</div>
+  <h2>Long call compared with a bull call spread</h2>
+  <div class="figure" role="img" aria-label="Payoff chart. Long 24000 call costs 2273, breakeven 26273, unlimited upside. Bull call spread 24000/26000 costs 1002, breakeven 25002, maximum profit 998.">
+    <svg viewBox="0 0 640 320" xmlns="http://www.w3.org/2000/svg">
+      <g class="c-grid">
+        <line x1="60" y1="20" x2="610" y2="20"/><line x1="60" y1="100" x2="610" y2="100"/><line x1="60" y1="260" x2="610" y2="260"/>
+        <line x1="170" y1="20" x2="170" y2="280"/><line x1="280" y1="20" x2="280" y2="280"/><line x1="390" y1="20" x2="390" y2="280"/><line x1="500" y1="20" x2="500" y2="280"/>
+      </g>
+      <line x1="60" y1="180" x2="610" y2="180" class="c-zero"/>
+      <g class="c-lab" text-anchor="end">
+        <text x="52" y="24">+4,000</text><text x="52" y="104">+2,000</text><text x="52" y="184">0</text><text x="52" y="264">−2,000</text>
+      </g>
+      <g class="c-lab" text-anchor="middle">
+        <text x="60" y="300">20,000</text><text x="170" y="300">22,000</text><text x="280" y="300">24,000</text><text x="390" y="300">26,000</text><text x="500" y="300">28,000</text><text x="610" y="300">30,000</text>
+        <text x="335" y="316">NIFTY at expiry</text>
+      </g>
+      <polyline class="c-call" points="60,270.92 280,270.92 610,30.92"/>
+      <polyline class="c-spr" points="60,220.08 280,220.08 390,140.08 610,140.08"/>
+      <circle cx="405" cy="180" r="4.5" class="c-dot-call"/>
+      <circle cx="335.1" cy="180" r="4.5" class="c-dot-spr"/>
+      <text x="412" y="196" class="c-lab">BE 26,273</text>
+      <text x="300" y="168" class="c-lab">BE 25,002</text>
+      <text x="70" y="262" class="c-lab">−2,273 max loss</text>
+      <text x="70" y="212" class="c-lab">−1,002 max loss</text>
+      <text x="520" y="132" class="c-lab">+998 cap</text>
+    </svg>
+    <div class="legend"><span>Buy 24,000 CE at 2,273</span><span class="spr">Buy 24,000 CE, sell 26,000 CE (net 1,002)</span></div>
+  </div>
+  <p class="col cap">Multiply by the lot size (for example 75) for rupee values. The spread costs less and has a nearer breakeven. It also caps the profit.</p>
+</section>
+
+<section class="col">
+  <div class="eyebrow">Set up</div>
+  <h2>Run it on your computer</h2>
+  <pre>python -m venv .venv-mcp
+.venv-mcp/bin/pip install -r global_options_mcp/requirements.txt
+cp global_options_mcp/.env.example .env      # add KITE_API_KEY, KITE_API_SECRET
+.venv-mcp/bin/python -m global_options_mcp.kite_login --write-env   # every morning
+claude mcp add global-options -- $PWD/.venv-mcp/bin/python -m global_options_mcp.server</pre>
+  <p class="note">Kite access tokens expire every day. Live quotes need a Kite Connect plan with market data. Without Kite keys, the global-data and maths tools still work.</p>
+</section>
+
+</div>

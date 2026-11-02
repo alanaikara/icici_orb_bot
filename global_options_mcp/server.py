@@ -24,8 +24,9 @@ except ImportError:
 
 from .analysis import macro_regime, rank_long_option_candidates
 from .global_data import ALL_SYMBOLS, UNIVERSE, GlobalData, compute_stats
+from .ideas import long_option_ideas as build_ideas
 from .kite_client import KiteNotConfigured, ZerodhaClient
-from .options_math import Leg, bs_greeks, historical_vol, implied_vol, payoff_summary, payoff_table
+from .options_math import Leg, bs_greeks, implied_vol, payoff_summary, payoff_table
 
 INSTRUCTIONS = """\
 Tools for research on LONG-DATED option positions (months to years) on Indian
@@ -183,35 +184,8 @@ def long_option_ideas(underlying: str, expiry: str, view: str = "bullish",
     """Combine the live chain, Nifty/stock historical vol and the macro regime
     into ranked long call (bullish) or long put (bearish) strikes. Legs with a
     bid-ask spread wider than max_spread_pct are dropped."""
-    chain = _kite_call(_zerodha.option_chain, underlying, expiry, width)
-    if "error" in chain:
-        return chain
-    side = "CE" if view.lower().startswith("bull") else "PE"
-    iv_map, prem, dropped = {}, {}, []
-    for row in chain["chain"]:
-        leg = row.get(side)
-        if not leg or not leg.get("iv"):
-            continue
-        if leg.get("spread_pct") is not None and leg["spread_pct"] > max_spread_pct:
-            dropped.append({"strike": row["strike"], "spread_pct": leg["spread_pct"]})
-            continue
-        iv_map[row["strike"]] = leg["iv"]
-        prem[row["strike"]] = leg.get("ask") or leg.get("mid")  # buyers pay the ask
-
-    yahoo = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK"}.get(underlying.upper(),
-                                                            f"{underlying.upper()}.NS")
-    hv = historical_vol(_data.closes(yahoo, "1y"))
-    ranked = rank_long_option_candidates(
-        chain["spot"], list(iv_map), chain["days_to_expiry"],
-        "call" if side == "CE" else "put", iv_map, prem, hv, _zerodha.r,
-        lot_size=int(chain.get("lot_size") or 1), capital=capital, max_risk_pct=max_risk_pct)
-    ranked["historical_vol_1y"] = round(hv, 4) if hv else None
-    ranked["dropped_illiquid"] = dropped
-    ranked["macro"] = macro_regime(_data.stats)
-    symbols = {r["strike"]: (r.get(side) or {}).get("tradingsymbol") for r in chain["chain"]}
-    for c in ranked["candidates"]:
-        c["tradingsymbol"] = symbols.get(c["strike"])
-    return ranked
+    return _kite_call(build_ideas, _zerodha, _data, underlying, expiry, view, capital,
+                      max_risk_pct, width, max_spread_pct)
 
 
 @mcp.tool()

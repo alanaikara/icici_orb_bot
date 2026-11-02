@@ -227,7 +227,8 @@ def rank_long_option_candidates(
             notes=notes,
         ))
 
-    rows.sort(key=lambda c: (-c.score, c.theta_pct_of_premium_per_month))
+    # Ties: prefer delta nearest 0.70 (middle of the stock-replacement zone).
+    rows.sort(key=lambda c: (-c.score, abs(abs(c.delta) - 0.70)))
     return {
         "spot": spot,
         "days_to_expiry": days_to_expiry,

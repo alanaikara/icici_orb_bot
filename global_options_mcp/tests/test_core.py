@@ -180,3 +180,51 @@ def test_order_guards():
     ok = z.place_option_order(sym, "BUY", 1, 1500, confirm=True)
     assert ok["status"] == "placed" and fk.placed[-1]["order_type"] == "LIMIT"
     assert fk.placed[-1]["product"] == "NRML" and fk.placed[-1]["quantity"] == 75
+
+
+# ---------------------------------------------------- dashboard helpers --
+
+from global_options_mcp.global_data import GlobalData as _GD
+from global_options_mcp.ideas import long_option_ideas, model_strikes, payoff_curves
+
+
+def test_model_strikes_grid():
+    s = model_strikes(24037, 500, 2)
+    assert s == [23000, 23500, 24000, 24500, 25000]
+    with pytest.raises(ValueError):
+        model_strikes(24000, 0)
+
+
+def test_payoff_curves_shapes():
+    rows = payoff_curves("call", 24000, 2273, 75, 24000, 365, 0.15,
+                         short_strike=26000, short_premium=1271, points=11)
+    assert {r["structure"] for r in rows} == {"Long option", "Debit spread"}
+    assert {r["when"] for r in rows} == {"At expiry", "Today (model)"}
+    exp_spread = [r for r in rows if r["structure"] == "Debit spread" and r["when"] == "At expiry"]
+    assert min(r["pnl"] for r in exp_spread) == pytest.approx(-1002 * 75)
+    # today's model value at spot equals ~0 P&L when premium is the model price
+    today = [r for r in rows if r["structure"] == "Long option" and r["when"] == "Today (model)"
+             and r["spot"] == 24000]
+    assert today[0]["pnl"] == pytest.approx(0, abs=75)
+    assert all(r["when"] == "At expiry" for r in payoff_curves("put", 24000, 900, 1, 24000, 0, 0.15))
+
+
+def test_long_option_ideas_live_path():
+    fk = FakeKite()
+    z = ZerodhaClient(kite=fk, limits=OrderLimits(False, 1e9, 10))
+    gd = _GD(fetcher=lambda s, p: _series(100, 0.0005))
+    res = long_option_ideas(z, gd, "NIFTY", fk.exp.isoformat(), "bullish",
+                            capital=1_000_000, max_risk_pct=5, width=4)
+    c0 = res["candidates"][0]
+    assert c0["tradingsymbol"].endswith("CE") and c0["ask"] and c0["oi"] == 1000
+    assert res["lot_size"] == 75 and "macro" in res
+    bear = long_option_ideas(z, gd, "NIFTY", fk.exp.isoformat(), "bearish", width=2,
+                             include_macro=False)
+    assert bear["kind"] == "put" and "macro" not in bear
+
+
+def test_rank_tie_prefers_delta_near_070():
+    res = rank_long_option_candidates(24000, model_strikes(24000, 500, 10), 365, "call", 0.15)
+    top = res["candidates"][0]
+    tied = [c for c in res["candidates"] if c["score"] == top["score"]]
+    assert abs(top["delta"] - 0.70) == min(abs(c["delta"] - 0.70) for c in tied)

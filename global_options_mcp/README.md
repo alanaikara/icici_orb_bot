@@ -82,6 +82,22 @@ the current URL). You can add it next to this server: use it for account access,
 and use this server for global data and option analytics. Without Kite Connect
 keys, all global-data and maths tools in this server still work.
 
+## Dashboard (Streamlit)
+
+```bash
+.venv-mcp/bin/streamlit run global_options_mcp/dashboard.py
+```
+
+- **Data source**: *Live (Zerodha)* uses the real chain (bid/ask, spread, OI). *Model* uses
+  Black-Scholes prices from spot and IV that you enter, so it works without Kite keys.
+- **Header**: global regime, macro score, 1-year historical vol, spot. A warning shows when your
+  view disagrees with the global regime.
+- **Ranked strikes**: the same ranking as the `long_option_ideas` MCP tool, with lots and capital at
+  risk for your budget.
+- **Payoff**: long option compared with a debit spread, at expiry and today (model value).
+- **Global markets**: the full global table by category.
+- **Order preview**: runs the order guards only. The dashboard never sends orders.
+
 ## Example questions for Claude
 
 - "Give me the macro regime and a one-paragraph global summary."
@@ -122,6 +138,8 @@ keys, all global-data and maths tools in this server still work.
 ```
 global_options_mcp/
 ├── server.py        MCP server (tools + prompt)
+├── dashboard.py     Streamlit dashboard for option ideas
+├── ideas.py         shared idea-building logic (server + dashboard)
 ├── kite_client.py   Zerodha adapter + order guards
 ├── kite_login.py    daily access-token helper
 ├── global_data.py   global universe + stats (Yahoo Finance)

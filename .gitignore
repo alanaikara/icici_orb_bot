@@ -29,6 +29,3 @@ build/
 .idea/
 .vscode/
 .DS_Store.claude/worktrees/
-
-# Global Options MCP venv
-.venv-mcp/

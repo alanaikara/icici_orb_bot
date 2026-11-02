@@ -14,6 +14,7 @@ import datetime as dt
 import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .analysis import nearest_strikes, safe_float
@@ -27,6 +28,26 @@ INDEX_SPOT = {
     "MIDCPNIFTY": "NSE:NIFTY MID SELECT",
     "NIFTYNXT50": "NSE:NIFTY NEXT 50",
 }
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """Minimal KEY=VALUE reader (comments, blank lines, quotes, `export`)."""
+    out: dict[str, str] = {}
+    try:
+        text = path.read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key = key.removeprefix("export ").strip()
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "'\"":
+            val = val[1:-1]
+        out[key] = val
+    return out
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -57,22 +78,39 @@ class ZerodhaClient:
             os.getenv("RISK_FREE_RATE", "0.065"))
         self._instruments: list[dict] | None = None
         self._instruments_day: dt.date | None = None
+        self._owns_kite = False
+        self._token: str | None = None
 
     # ---------------------------------------------------------- session --
+    @staticmethod
+    def _read_credentials() -> tuple[str | None, str | None]:
+        """API key + access token. The .env file wins over the process env, so a
+        new daily token written by kite_login reaches a running server."""
+        api_key, token = os.getenv("KITE_API_KEY"), os.getenv("KITE_ACCESS_TOKEN")
+        env_file = Path(os.getenv("KITE_ENV_FILE", ".env"))
+        if env_file.is_file():
+            vals = read_env_file(env_file)
+            api_key = vals.get("KITE_API_KEY") or api_key
+            token = vals.get("KITE_ACCESS_TOKEN") or token
+        return api_key, token
+
     @property
     def kite(self):
+        if self._kite is not None and not self._owns_kite:
+            return self._kite  # injected (tests)
+        api_key, token = self._read_credentials()
+        if not api_key or not token:
+            raise KiteNotConfigured(
+                "Set KITE_API_KEY and KITE_ACCESS_TOKEN (run: python -m global_options_mcp.kite_login)."
+            )
         if self._kite is None:
-            api_key = os.getenv("KITE_API_KEY")
-            token = os.getenv("KITE_ACCESS_TOKEN")
-            if not api_key or not token:
-                raise KiteNotConfigured(
-                    "Set KITE_API_KEY and KITE_ACCESS_TOKEN (run: python -m global_options_mcp.kite_login)."
-                )
             from kiteconnect import KiteConnect
 
-            k = KiteConnect(api_key=api_key)
-            k.set_access_token(token)
-            self._kite = k
+            self._kite = KiteConnect(api_key=api_key)
+            self._owns_kite = True
+        if token != self._token:
+            self._kite.set_access_token(token)
+            self._token = token
         return self._kite
 
     # ----------------------------------------------------------- account --

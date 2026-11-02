@@ -30,8 +30,8 @@ positions** (months to years) on Indian markets.
 ## Set up
 
 ### 1. Get a Kite Connect app
-Create an app at <https://developers.kite.trade>. Set the redirect URL to
-`http://127.0.0.1/` (any URL works; you copy the token from it). Live quotes and
+Create an app at <https://developers.kite.trade>. Set the **redirect URL** to
+`http://127.0.0.1:5000/` and leave the postback URL empty. Live quotes and
 option chains need a Kite Connect plan that includes market data. Check the
 current price on the Zerodha site.
 
@@ -51,7 +51,62 @@ Fill in `KITE_API_KEY` and `KITE_API_SECRET`.
 
 ### 4. Log in (every morning, the token expires daily)
 ```bash
-.venv-mcp/bin/python -m global_options_mcp.kite_login --write-env
+.venv-mcp/bin/python -m global_options_mcp.kite_login --if-needed
+```
+The browser opens the Kite login page. You log in (password + 2FA). The script
+catches the redirect on `http://127.0.0.1:5000/`, saves `KITE_ACCESS_TOKEN` to
+`.env` and exits. The MCP server and dashboard pick up the new token on the next
+call, with no restart.
+
+| Option | Use |
+|---|---|
+| `--if-needed` | Skip the login if today's token still works |
+| `--check` | Only test the saved token (exit code 0 = valid, 2 = expired) |
+| `--manual` | Paste the redirect URL yourself (for a remote machine) |
+| `--no-browser` | Print the login URL, do not open a browser |
+| `KITE_REDIRECT_URL` | Use another local redirect URL; it must match the Kite console |
+
+**Why the password and 2FA stay manual:** Zerodha requires a manual login once a
+day. A script that stores your password and TOTP secret also gives full account
+access to anyone who reads that file. This tool never stores them.
+
+#### Open the login automatically every weekday morning
+The scheduled job opens the browser at 8:45. You only log in.
+
+**macOS** (launchd): save as `~/Library/LaunchAgents/com.user.kitelogin.plist`, then run
+`launchctl load ~/Library/LaunchAgents/com.user.kitelogin.plist`.
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.user.kitelogin</string>
+  <key>WorkingDirectory</key><string>/ABSOLUTE/PATH/icici_orb_bot</string>
+  <key>ProgramArguments</key><array>
+    <string>/ABSOLUTE/PATH/icici_orb_bot/.venv-mcp/bin/python</string>
+    <string>-m</string><string>global_options_mcp.kite_login</string><string>--if-needed</string>
+  </array>
+  <key>StartCalendarInterval</key><array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/tmp/kitelogin.log</string>
+  <key>StandardErrorPath</key><string>/tmp/kitelogin.log</string>
+</dict></plist>
+```
+
+**Windows** (Task Scheduler, run in PowerShell):
+```powershell
+$a = New-ScheduledTaskAction -Execute "C:\PATH\icici_orb_bot\.venv-mcp\Scripts\python.exe" -Argument "-m global_options_mcp.kite_login --if-needed" -WorkingDirectory "C:\PATH\icici_orb_bot"
+$t = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At 8:45am
+Register-ScheduledTask -TaskName "KiteLogin" -Action $a -Trigger $t
+```
+
+**Linux desktop** (`crontab -e`; cron needs your display to open a browser):
+```
+45 8 * * 1-5 cd /ABSOLUTE/PATH/icici_orb_bot && DISPLAY=:0 .venv-mcp/bin/python -m global_options_mcp.kite_login --if-needed >> /tmp/kitelogin.log 2>&1
 ```
 
 ### 5. Connect to Claude
@@ -141,7 +196,7 @@ global_options_mcp/
 ├── dashboard.py     Streamlit dashboard for option ideas
 ├── ideas.py         shared idea-building logic (server + dashboard)
 ├── kite_client.py   Zerodha adapter + order guards
-├── kite_login.py    daily access-token helper
+├── kite_login.py    daily login: auto-captures the redirect, saves the token
 ├── global_data.py   global universe + stats (Yahoo Finance)
 ├── analysis.py      macro regime + strike ranking
 ├── options_math.py  Black-Scholes, Greeks, IV, HV, payoff

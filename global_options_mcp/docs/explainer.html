@@ -230,7 +230,7 @@ tr.top td { background: var(--accent-soft); }
   <pre>python -m venv .venv-mcp
 .venv-mcp/bin/pip install -r global_options_mcp/requirements.txt
 cp global_options_mcp/.env.example .env      # add KITE_API_KEY, KITE_API_SECRET
-.venv-mcp/bin/python -m global_options_mcp.kite_login --write-env   # every morning
+.venv-mcp/bin/python -m global_options_mcp.kite_login --if-needed   # every morning: log in, token saved
 claude mcp add global-options -- $PWD/.venv-mcp/bin/python -m global_options_mcp.server</pre>
   <p class="note">Kite access tokens expire every day. Live quotes need a Kite Connect plan with market data. Without Kite keys, the global-data and maths tools still work.</p>
 </section>

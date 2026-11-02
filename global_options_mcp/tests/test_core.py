@@ -228,3 +228,98 @@ def test_rank_tie_prefers_delta_near_070():
     top = res["candidates"][0]
     tied = [c for c in res["candidates"] if c["score"] == top["score"]]
     assert abs(top["delta"] - 0.70) == min(abs(c["delta"] - 0.70) for c in tied)
+
+
+# ------------------------------------------------------------- login ---
+
+import threading
+import urllib.error
+import urllib.request
+
+from global_options_mcp import kite_login
+
+
+def test_parse_request_token():
+    url = "http://127.0.0.1:5000/?action=login&type=login&status=success&request_token=AbC123xyz"
+    assert kite_login.parse_request_token(url) == "AbC123xyz"
+    assert kite_login.parse_request_token("  AbC123xyz ") == "AbC123xyz"
+    assert kite_login.parse_request_token("not a token!") is None
+
+
+def _run_capture(query_paths):
+    """Start the capture server on a free port and send the given GET paths."""
+    out = {}
+    port_ready = threading.Event()
+
+    def ready(port):
+        out["port"] = port
+        port_ready.set()
+
+    t = threading.Thread(target=lambda: out.setdefault(
+        "token", kite_login.wait_for_request_token("http://127.0.0.1:0/", 10, ready)))
+    t.start()
+    assert port_ready.wait(5)
+    codes = []
+    for q in query_paths:
+        try:
+            codes.append(urllib.request.urlopen(f"http://127.0.0.1:{out['port']}{q}", timeout=5).status)
+        except urllib.error.HTTPError as e:
+            codes.append(e.code)
+    t.join(10)
+    return out["token"], codes
+
+
+def test_capture_server_gets_token_and_ignores_noise():
+    token, codes = _run_capture(["/favicon.ico", "/?status=success&request_token=Tok12345"])
+    assert token == "Tok12345" and codes == [404, 200]
+
+
+def test_capture_server_failed_login():
+    token, codes = _run_capture(["/?status=error"])
+    assert token is None and codes == [400]
+
+
+def test_capture_rejects_non_local_redirect():
+    with pytest.raises(ValueError):
+        kite_login.wait_for_request_token("https://example.com/cb", 1)
+
+
+def test_update_env_replaces_key(tmp_path):
+    p = tmp_path / ".env"
+    p.write_text("KITE_API_KEY=k\nKITE_ACCESS_TOKEN=old\n")
+    kite_login._update_env(p, "KITE_ACCESS_TOKEN", "new")
+    assert p.read_text() == "KITE_API_KEY=k\nKITE_ACCESS_TOKEN=new\n"
+
+
+def test_client_reloads_token_from_env_file(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("KITE_API_KEY=key1\nKITE_ACCESS_TOKEN=tok1\n")
+    monkeypatch.setenv("KITE_ENV_FILE", str(env))
+    monkeypatch.delenv("KITE_ACCESS_TOKEN", raising=False)
+    z = ZerodhaClient()
+    k1 = z.kite
+    assert k1.access_token == "tok1"
+    env.write_text("KITE_API_KEY=key1\nKITE_ACCESS_TOKEN=tok2\n")
+    assert z.kite is k1 and k1.access_token == "tok2"
+
+
+def test_token_works():
+    class Good:
+        def __init__(self, api_key): pass
+        def set_access_token(self, t): pass
+        def profile(self): return {"user_id": "AB1234"}
+
+    class Bad(Good):
+        def profile(self): raise RuntimeError("TokenException")
+
+    assert kite_login.token_works("k", "t", Good) == {"user_id": "AB1234"}
+    assert kite_login.token_works("k", "t", Bad) is None
+    assert kite_login.token_works("k", None, Good) is None
+
+
+def test_read_env_file(tmp_path):
+    from global_options_mcp.kite_client import read_env_file
+    p = tmp_path / ".env"
+    p.write_text('# c\n\nexport A=1\nB="two words"\nC=\'x=y\'\nbad line\n')
+    assert read_env_file(p) == {"A": "1", "B": "two words", "C": "x=y"}
+    assert read_env_file(tmp_path / "missing") == {}

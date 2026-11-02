@@ -11,7 +11,6 @@ The dashboard never sends orders. "Preview order" only runs the order guards.
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -32,7 +31,7 @@ from global_options_mcp.global_data import UNIVERSE, GlobalData
 from global_options_mcp.ideas import (long_option_ideas, model_strikes, payoff_curves,
                                       underlying_hv, yahoo_symbol)
 from global_options_mcp.kite_client import ZerodhaClient
-from global_options_mcp.options_math import bs_price, payoff_summary, Leg
+from global_options_mcp.options_math import Leg, payoff_summary
 
 st.set_page_config(page_title="Option Ideas", page_icon="📈", layout="wide")
 
@@ -82,7 +81,8 @@ def cached_live_ideas(underlying, expiry, view, capital, risk, width, max_spread
 
 
 def kite_ready() -> bool:
-    return bool(os.getenv("KITE_API_KEY") and os.getenv("KITE_ACCESS_TOKEN"))
+    api_key, token = ZerodhaClient._read_credentials()  # re-reads .env after a new login
+    return bool(api_key and token)
 
 
 # -------------------------------------------------------------- sidebar --
@@ -93,7 +93,7 @@ source = st.sidebar.radio("Data source", ["Live (Zerodha)", "Model (no broker)"]
 live = source.startswith("Live")
 if live and not kite_ready():
     st.sidebar.error("Set KITE_API_KEY and KITE_ACCESS_TOKEN. "
-                     "Run: python -m global_options_mcp.kite_login --write-env")
+                     "Run: python -m global_options_mcp.kite_login --if-needed")
 
 underlying = st.sidebar.text_input("Underlying", "NIFTY", key="underlying").strip().upper()
 view = st.sidebar.radio("View", ["bullish", "bearish"], horizontal=True, key="view")
